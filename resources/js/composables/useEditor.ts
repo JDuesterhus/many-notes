@@ -220,6 +220,70 @@ export function useEditor(options: SetupEditorOptions) {
         options.onUpdate(markdown);
     }
 
+    function rewriteVaultLinks(
+        originalPath: string,
+        replacementPath: string,
+        extension: string
+    ): void {
+        const instance = editor.value;
+
+        if (!instance || originalPath === replacementPath) {
+            return;
+        }
+
+        const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const from = originalPath.replace(/^\/+/, '').replace(/\/+$/, '');
+        const to = replacementPath.replace(/^\/+/, '').replace(/\/+$/, '');
+        const extensionPart =
+            extension === 'md' ? '(?:\\.md)?' : extension ? `\\.${escape(extension)}` : '';
+        const pattern = new RegExp(`^/?${escape(from)}${extensionPart}$`, 'i');
+        const replacement = extension ? `/${to}.${extension}` : `/${to}`;
+
+        const matches = (value: unknown): boolean => {
+            if (typeof value !== 'string') {
+                return false;
+            }
+
+            try {
+                return pattern.test(decodeURI(value));
+            } catch {
+                return pattern.test(value);
+            }
+        };
+
+        const transaction = instance.state.tr;
+        let changed = false;
+
+        instance.state.doc.descendants((node, position) => {
+            if (node.isText) {
+                const link = node.marks.find(mark => mark.type.name === 'link');
+
+                if (link && matches(link.attrs.href)) {
+                    transaction.addMark(
+                        position,
+                        position + node.nodeSize,
+                        link.type.create({ ...link.attrs, href: replacement })
+                    );
+                    changed = true;
+                }
+
+                return;
+            }
+
+            if (node.type.name === 'image' && matches(node.attrs.src)) {
+                transaction.setNodeMarkup(position, null, {
+                    ...node.attrs,
+                    src: replacement,
+                });
+                changed = true;
+            }
+        });
+
+        if (changed) {
+            instance.view.dispatch(transaction);
+        }
+    }
+
     async function onMarkdownChanged(markdown: string): Promise<void> {
         if (collaboration || isSyncing) {
             return;
@@ -251,6 +315,7 @@ export function useEditor(options: SetupEditorOptions) {
         editor,
         setContent,
         replaceContent,
+        rewriteVaultLinks,
         onMarkdownChanged,
         readMarkdown,
     };

@@ -6,6 +6,7 @@ export interface EditorContext {
     editor: ShallowRef<Editor | null>;
     setContent: (markdown: string) => Promise<void>;
     replaceContent: (markdown: string) => Promise<void>;
+    rewriteVaultLinks: (originalPath: string, replacementPath: string, extension: string) => void;
     onMarkdownChanged: (markdown: string) => Promise<void>;
     readMarkdown: () => string;
     isCollaborative: boolean;

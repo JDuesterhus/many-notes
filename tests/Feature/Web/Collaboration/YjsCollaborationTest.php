@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use App\Actions\CreateVault;
 use App\Actions\CreateVaultNode;
+use App\Actions\UpdateVaultNode;
+use App\Events\VaultNodeLinksRewrittenEvent;
 use App\Events\VaultNodeSnapshotUpdatedEvent;
 use App\Events\VaultNodeUpdatedEvent;
 use App\Events\VaultOpenedFileDataUpdatedEvent;
@@ -239,6 +241,32 @@ it('does not include note content in snapshot metadata events', function (): voi
     Event::assertDispatched(
         VaultOpenedFileDataUpdatedEvent::class,
         fn(VaultOpenedFileDataUpdatedEvent $event): bool => $event->broadcastWith()['data']['file']->content === null,
+    );
+});
+
+it('broadcasts a metadata-only link rewrite when a target is renamed', function (): void {
+    Event::fake([VaultNodeLinksRewrittenEvent::class]);
+
+    $user = User::factory()->create();
+    [$vault, $target] = collaborativeNote($user, 'Target');
+    $target->update(['name' => 'target']);
+    $source = app(CreateVaultNode::class)->handle($vault, [
+        'is_file' => true,
+        'name' => 'source',
+        'extension' => 'md',
+        'content' => 'See [target](/target.md).',
+    ]);
+
+    app(UpdateVaultNode::class)->handle($target, ['name' => 'renamed']);
+
+    Event::assertDispatched(
+        VaultNodeLinksRewrittenEvent::class,
+        fn(VaultNodeLinksRewrittenEvent $event): bool => $event->broadcastWith()['data'] === [
+            'node_id' => $source->id,
+            'original_path' => 'target',
+            'replacement_path' => 'renamed',
+            'extension' => 'md',
+        ],
     );
 });
 

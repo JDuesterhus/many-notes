@@ -138,6 +138,15 @@ This is optimistic concurrency. A stale offline snapshot can never overwrite a
 newer snapshot. Snapshots are only sent while the provider is synced, so a
 client that reconnects cannot push stale content before syncing.
 
+### Rename/move link rewrites
+
+Renaming or moving a target rewrites link/image paths in backlink notes in the
+database. Because a live note is sourced from Yjs, Laravel also broadcasts a
+metadata-only `VaultNodeLinksRewrittenEvent`. Open editors apply the same path
+rewrite to their link marks and image nodes, which produces a Yjs update; the
+next Markdown snapshot therefore keeps the rewritten path instead of reverting
+it. No note content is sent in this event.
+
 ### Export behavior
 
 Vault export and the file on disk use the last accepted snapshot. Navigating
@@ -395,7 +404,7 @@ not committed.
 | Check | Result |
 | --- | --- |
 | `composer analyse` (Rector, Pint, PHPCS, PHPStan level 10, type coverage) | passed; type coverage 100 % |
-| `composer test` (Pest, parallel) | 212 passed, 554 assertions |
+| `composer test` (Pest, parallel) | 213 passed, 555 assertions |
 | `npm run lint` / `npm run format` / `npm run typecheck` / `npm run build` | passed |
 | `yjs-server`: `npm run typecheck` | passed |
 | `yjs-server`: `npm test` | 19 passed |
@@ -411,6 +420,7 @@ not committed.
 | Two users edit different paragraphs | both markers present in both editors |
 | Disconnect removes presence | line chip and caret disappeared for the remaining user |
 | Large note (300 real blocks) | opened in ~1.5 s; edits synced |
+| Live link rewrite on rename | open editor link changed to the renamed path; snapshot kept it |
 | Live Typesense search after snapshot | unique phrase found the note |
 | Vault ZIP export after snapshot | exported Markdown contained the phrase |
 | NAS deployment (Docker Compose) | app + Yjs + Nginx proxy healthy at port 8070 |

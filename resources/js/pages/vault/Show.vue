@@ -243,6 +243,25 @@ useEcho<{
     });
 });
 
+useEcho<{
+    data: {
+        node_id: number;
+        original_path: string;
+        replacement_path: string;
+        extension: string;
+    };
+}>(`Vault.${props.vault.id}`, 'VaultNodeLinksRewrittenEvent', ({ data }) => {
+    if (openedFile.value?.file.id !== data.node_id || !editorContext.value?.isCollaborative) {
+        return;
+    }
+
+    editorContext.value.rewriteVaultLinks(
+        data.original_path,
+        data.replacement_path,
+        data.extension
+    );
+});
+
 useEcho<{ data: VaultOpenedFileData }>(
     `Vault.${props.vault.id}`,
     'VaultOpenedFileDataUpdatedEvent',

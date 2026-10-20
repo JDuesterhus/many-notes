@@ -82,69 +82,70 @@ const effectiveEditMode = computed(
 
 const showMarkdownEditor = computed(() => !isLive.value && isEditingMarkdown.value);
 
-const { editor, setContent, replaceContent, onMarkdownChanged, readMarkdown } = useEditor({
-    vaultId: String(props.node.vault_id),
-    element: noteEditorRef,
-    markdownElement: noteMarkdownRef,
-    autofocus: false,
-    content: isLive.value ? '' : (props.node.content ?? ''),
-    isEditMode: effectiveEditMode,
-    collaboration: collaboration.editorOptions.value,
-    onEditorReady: attachEditor,
-    onBlur: () => {
-        if (isLive.value) {
-            void collaboration.flush();
-        }
-    },
-    onUpdate: (markdown: string) => {
-        if (isLive.value) {
-            onContentChange(markdown);
+const { editor, setContent, replaceContent, rewriteVaultLinks, onMarkdownChanged, readMarkdown } =
+    useEditor({
+        vaultId: String(props.node.vault_id),
+        element: noteEditorRef,
+        markdownElement: noteMarkdownRef,
+        autofocus: false,
+        content: isLive.value ? '' : (props.node.content ?? ''),
+        isEditMode: effectiveEditMode,
+        collaboration: collaboration.editorOptions.value,
+        onEditorReady: attachEditor,
+        onBlur: () => {
+            if (isLive.value) {
+                void collaboration.flush();
+            }
+        },
+        onUpdate: (markdown: string) => {
+            if (isLive.value) {
+                onContentChange(markdown);
 
-            return;
-        }
+                return;
+            }
 
-        if (debounceTimer) {
-            clearTimeout(debounceTimer);
-        }
+            if (debounceTimer) {
+                clearTimeout(debounceTimer);
+            }
 
-        debounceTimer = setTimeout(() => {
-            const url = VaultNodeController.update.url({
-                vault: props.node.vault_id,
-                node: props.node.id,
-            });
+            debounceTimer = setTimeout(() => {
+                const url = VaultNodeController.update.url({
+                    vault: props.node.vault_id,
+                    node: props.node.id,
+                });
 
-            layoutStore.setVaultNodeUpdating(true);
+                layoutStore.setVaultNodeUpdating(true);
 
-            form.content = markdown;
+                form.content = markdown;
 
-            form.patch(url, {
-                onFailure: () => {
-                    if (isUnmounted) {
-                        return;
-                    }
+                form.patch(url, {
+                    onFailure: () => {
+                        if (isUnmounted) {
+                            return;
+                        }
 
-                    emit('contentUpdated', props.node.content ?? '');
-                    editorContext.value?.setContent(props.node.content ?? '');
-                },
-                onSuccess: (response: { data: VaultNode }) => {
-                    emit('contentUpdated', response.data.content ?? '');
-                },
-                onFinish: () => {
-                    layoutStore.setVaultNodeUpdating(false);
-                },
-            });
-        }, 1000);
-    },
-    openFilePath: vaultActions.openFilePath,
-    uploadFiles: request =>
-        importFiles({
-            vaultId: props.node.vault_id,
-            parentId: props.node.parent_id,
-            files: request.files,
-            onSuccess: request.onSuccess,
-            onFinish: request.onFinish,
-        }),
-});
+                        emit('contentUpdated', props.node.content ?? '');
+                        editorContext.value?.setContent(props.node.content ?? '');
+                    },
+                    onSuccess: (response: { data: VaultNode }) => {
+                        emit('contentUpdated', response.data.content ?? '');
+                    },
+                    onFinish: () => {
+                        layoutStore.setVaultNodeUpdating(false);
+                    },
+                });
+            }, 1000);
+        },
+        openFilePath: vaultActions.openFilePath,
+        uploadFiles: request =>
+            importFiles({
+                vaultId: props.node.vault_id,
+                parentId: props.node.parent_id,
+                files: request.files,
+                onSuccess: request.onSuccess,
+                onFinish: request.onFinish,
+            }),
+    });
 
 onMounted(() => {
     if (isLive.value && isEditingMarkdown.value) {
@@ -157,6 +158,7 @@ onMounted(() => {
         editor,
         setContent,
         replaceContent,
+        rewriteVaultLinks,
         onMarkdownChanged,
         readMarkdown,
         isCollaborative: isLive.value,

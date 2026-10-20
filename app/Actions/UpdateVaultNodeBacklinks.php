@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Actions;
 
+use App\Events\VaultNodeLinksRewrittenEvent;
 use App\Models\VaultNode;
 use Illuminate\Support\Facades\DB;
 
@@ -60,6 +61,15 @@ final readonly class UpdateVaultNodeBacklinks
             );
 
             app(UpdateVaultNode::class)->handle($backlink, ['content' => $content], true);
+
+            // The content broadcast is ignored by live editors. This metadata
+            // event lets an open Yjs document apply the same path rewrite.
+            broadcast(new VaultNodeLinksRewrittenEvent(
+                $backlink,
+                $originalLinkPath,
+                $replacementLinkPath,
+                (string) $node->extension,
+            ));
         }
     }
 
