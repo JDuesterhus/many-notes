@@ -342,6 +342,9 @@ routes.
   Redis) instead.
 - The final `sendBeacon` flush is subject to the browser's beacon payload limit;
   very large notes rely on the 2-second debounced snapshot for the last write.
+- If a client is offline while a target file is renamed or moved, it can miss
+  the metadata-only link rewrite event. Reload the open note after reconnecting
+  before continuing to edit it.
 - No Electron/Tauri/Capacitor wrapper yet.
 
 ## Wrapper readiness
