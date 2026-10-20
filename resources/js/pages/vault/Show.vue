@@ -14,7 +14,6 @@ import VaultFilePdf from '@/components/vault/VaultFilePdf.vue';
 import VaultFileVideo from '@/components/vault/VaultFileVideo.vue';
 import VaultToggleContentWidthButton from '@/components/vault/VaultToggleContentWidthButton.vue';
 import { useContentWidthPreference } from '@/composables/useContentWidthPreference';
-import { useEditor } from '@/composables/useEditor';
 import { useModalManager } from '@/composables/useModalManager';
 import { useReloadOnPopstate } from '@/composables/useReloadOnPopstate';
 import { useScreenSize } from '@/composables/useScreenSize';
@@ -34,6 +33,8 @@ import { useVaultRecentFileStore } from '@/stores/vaultRecentFile';
 import { useVaultTagStore } from '@/stores/vaultTag';
 import { useVaultTemplateStore } from '@/stores/vaultTemplate';
 import { useVaultTreeStore } from '@/stores/vaultTree';
+import { AppPageProps } from '@/types';
+import { EditorContext } from '@/types/editor';
 import {
     VaultCollaborator,
     VaultEditorTemplateFile,
@@ -44,15 +45,17 @@ import {
 import { VaultUpdated } from '@/types/vault.events';
 import { VaultShowPageProps } from '@/types/vault.pages';
 import { formatElapsedTime, formatExtendedDate } from '@/utils/time';
-import { Head, router } from '@inertiajs/vue3';
+import { Head, router, usePage } from '@inertiajs/vue3';
 import { useEcho } from '@laravel/echo-vue';
 import { storeToRefs } from 'pinia';
-import { onMounted, provide, ref, shallowRef, watch } from 'vue';
+import { computed, onMounted, provide, ref, shallowRef, watch } from 'vue';
 
 defineOptions({ layout: AuthLayout });
 
 const props = defineProps<VaultShowPageProps>();
 
+const page = usePage<AppPageProps>();
+const currentUserId = computed(() => page.props.app?.user?.id ?? null);
 const layoutStore = useLayoutStore();
 const { isLeftPanelOpen, isRightPanelOpen } = storeToRefs(layoutStore);
 const { toggleLeftPanel, toggleRightPanel, closePanels, syncPanelsWithScreen } = layoutStore;
@@ -95,7 +98,7 @@ useReloadOnPopstate({
     },
 });
 
-const editorContext = shallowRef<ReturnType<typeof useEditor> | null>(null);
+const editorContext = shallowRef<EditorContext | null>(null);
 provide('editorContext', editorContext);
 
 onMounted(() => {
@@ -208,10 +211,36 @@ useEcho<{ data: VaultNode }>(`Vault.${props.vault.id}`, 'VaultNodeUpdatedEvent',
                 openedFile.value?.file.content !== payload.data.content
             ) {
                 openedFile.value.file.content = payload.data.content;
-                editorContext.value?.setContent(payload.data.content ?? '');
+
+                // For a live note the Yjs document is the only source of
+                // truth. Applying this legacy full-document broadcast would
+                // overwrite concurrent edits and loop back into a snapshot.
+                if (!editorContext.value?.isCollaborative) {
+                    editorContext.value?.setContent(payload.data.content ?? '');
+                }
             }
         }
     }
+});
+
+useEcho<{
+    data: {
+        node_id: number;
+        vault_id: number;
+        snapshot_seq: number;
+        snapshot_updated_at: string;
+    };
+}>(`Vault.${props.vault.id}`, 'VaultNodeSnapshotUpdatedEvent', ({ data }) => {
+    if (openedFile.value?.file.id !== data.node_id) {
+        return;
+    }
+
+    editorContext.value?.updateSnapshotSeq(data.snapshot_seq);
+    openedFile.value.file.updated_at = data.snapshot_updated_at;
+    vaultRecentFileStore.upsertRecentFile({
+        ...openedFile.value.file,
+        updated_at: data.snapshot_updated_at,
+    });
 });
 
 useEcho<{ data: VaultOpenedFileData }>(
@@ -255,6 +284,11 @@ useEcho<{ data: { user_id: number } }>(
     'VaultCollaborationDeletedEvent',
     ({ data }) => {
         vaultStore.removeCollaborator(data.user_id);
+
+        if (data.user_id === currentUserId.value) {
+            createToast('Your access to this vault was revoked', 'warning');
+            router.visit(index.url(), { replace: true, fresh: true });
+        }
     }
 );
 </script>

@@ -1,6 +1,9 @@
+import { CollaborationPageProps } from './collaboration';
 import { Settings } from './settings';
 
 export interface AppPageProps {
+    [key: string]: unknown;
+    collaboration?: CollaborationPageProps;
     app?: {
         user?: User;
         settings?: Settings;

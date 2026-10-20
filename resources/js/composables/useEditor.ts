@@ -1,4 +1,4 @@
-import { markedService } from '@/services/marked';
+import { markdownToHTML, prepareTiptapHTML } from '@/services/markdown';
 import { CustomCodeBlockLowlight } from '@/services/tiptap/extension-custom-code-block-low-light';
 import { CustomImage } from '@/services/tiptap/extension-custom-image';
 import { CustomLink } from '@/services/tiptap/extension-custom-link';
@@ -7,6 +7,7 @@ import { CustomTableColumnAlign } from '@/services/tiptap/extension-custom-table
 import { CustomTableHeader } from '@/services/tiptap/extension-custom-table-header';
 import { CustomTaskItem } from '@/services/tiptap/extension-custom-task-item';
 import { Hashtag } from '@/services/tiptap/extension-hashtag';
+import { PresenceLineChips } from '@/services/tiptap/extension-presence-line-chips';
 import { SmartBracket } from '@/services/tiptap/extension-smart-bracket';
 import { VaultFileDrop } from '@/services/tiptap/extension-vault-file-drop';
 import {
@@ -14,7 +15,10 @@ import {
     VaultFileUploadRequest,
 } from '@/services/tiptap/extension-vault-file-upload';
 import { turndownService } from '@/services/turndown';
+import type { EditorCollaboration, PresenceUser } from '@/types/collaboration';
 import { Editor } from '@tiptap/core';
+import Collaboration from '@tiptap/extension-collaboration';
+import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import { Table, TableRow } from '@tiptap/extension-table';
 import TaskList from '@tiptap/extension-task-list';
 import StarterKit from '@tiptap/starter-kit';
@@ -31,55 +35,47 @@ interface SetupEditorOptions {
     onUpdate: (markdown: string) => void;
     openFilePath: (path: string) => void;
     uploadFiles: (request: VaultFileUploadRequest) => void;
+    collaboration?: EditorCollaboration | null;
+    onEditorReady?: (
+        editor: Editor,
+        setContent: (markdown: string) => Promise<void>,
+        readMarkdown: () => string
+    ) => void;
+}
+
+function renderCollaborationCaret(user: PresenceUser): HTMLElement {
+    const caret = document.createElement('span');
+    caret.className = 'collaboration-carets__caret';
+    caret.style.borderColor = user.color;
+
+    const label = document.createElement('span');
+    label.className = 'collaboration-carets__label';
+    label.style.backgroundColor = user.color;
+    label.textContent = user.name;
+
+    caret.appendChild(label);
+
+    return caret;
 }
 
 export function useEditor(options: SetupEditorOptions) {
     const editor = shallowRef<Editor | null>(null);
+    const collaboration = options.collaboration ?? null;
     let isSyncing: boolean = true;
 
-    const prepareTiptapHTML = (html: string) => {
-        const doc = new DOMParser().parseFromString(html, 'text/html');
+    const content = !collaboration && options.content ? markdownToHTML(options.content) : '';
 
-        // Prepare plain text code
-        doc.querySelectorAll('code.language-plaintext').forEach(element => {
-            element.classList.remove('language-plaintext');
+    const readMarkdown = (): string => {
+        const instance = editor.value;
 
-            if (element.classList.length === 0) {
-                element.removeAttribute('class');
-            }
-        });
+        if (!instance) {
+            return '';
+        }
 
-        // Prepare links
-        doc.querySelectorAll<HTMLAnchorElement>('a[data-href]').forEach(element => {
-            element.setAttribute('href', element.dataset.href ?? '');
-            delete element.dataset.href;
-        });
+        const html = prepareTiptapHTML(instance.getHTML());
 
-        return doc.body.innerHTML;
+        return turndownService.turndown(html);
     };
-
-    const encodeText = (text: string) => {
-        // Encode paths from Markdown links
-        const encoded = text.replace(
-            /\[(.*?)\]\((.*?)(\s".*?")?\)/g,
-            (match, text, path, title) => {
-                if (title === undefined) {
-                    title = '';
-                }
-
-                try {
-                    return `[${text}](${encodeURI(path)}${title})`;
-                } catch {
-                    return `[${text}](${path}${title})`;
-                }
-            }
-        );
-
-        // Prevent HTML rendering
-        return encoded.replace(/</g, '&lt;');
-    };
-
-    const content = options.content ? markedService.parse(encodeText(options.content)) : '';
 
     onMounted(() => {
         editor.value = new Editor({
@@ -94,6 +90,7 @@ export function useEditor(options: SetupEditorOptions) {
                     },
                     codeBlock: false,
                     link: false,
+                    ...(collaboration ? { undoRedo: false } : {}),
                 }),
                 SmartBracket,
                 Hashtag,
@@ -131,6 +128,30 @@ export function useEditor(options: SetupEditorOptions) {
                     placeholderClass:
                         'bg-light-base-300 dark:bg-base-800 text-light-base-700 dark:text-base-200 rounded-sm px-1 text-sm',
                 }),
+                ...(collaboration
+                    ? [
+                          Collaboration.configure({
+                              document: collaboration.document,
+                              field: 'default',
+                              provider: collaboration.provider,
+                          }),
+                          CollaborationCaret.configure({
+                              provider: collaboration.provider,
+                              user: collaboration.user,
+                              render: renderCollaborationCaret,
+                              selectionRender: (user: PresenceUser) => ({
+                                  nodeName: 'span',
+                                  class: 'collaboration-carets__selection',
+                                  style: `background-color: ${user.color}33`,
+                                  'data-user': user.name,
+                              }),
+                          }),
+                          PresenceLineChips.configure({
+                              awareness: collaboration.provider.awareness,
+                              localClientId: collaboration.provider.awareness?.clientID ?? null,
+                          }),
+                      ]
+                    : []),
             ],
             content: content,
             editable: options.isEditMode.value,
@@ -142,7 +163,15 @@ export function useEditor(options: SetupEditorOptions) {
             onCreate() {
                 isSyncing = false;
 
-                setMarkdownContent(options.content);
+                if (!collaboration) {
+                    setMarkdownContent(options.content);
+                }
+
+                const instance = editor.value;
+
+                if (instance && collaboration) {
+                    options.onEditorReady?.(instance, setContent, readMarkdown);
+                }
             },
             onUpdate() {
                 if (isSyncing) {
@@ -151,8 +180,7 @@ export function useEditor(options: SetupEditorOptions) {
 
                 isSyncing = true;
 
-                const html = prepareTiptapHTML(editor.value?.getHTML() ?? '');
-                const markdown = turndownService.turndown(html);
+                const markdown = readMarkdown();
                 setMarkdownContent(markdown);
 
                 isSyncing = false;
@@ -162,35 +190,38 @@ export function useEditor(options: SetupEditorOptions) {
         });
     });
 
-    function setTiptapContent(html: string) {
+    function setTiptapContent(html: string): void {
         editor.value?.commands.setContent(html);
     }
 
-    function setMarkdownContent(markdown: string) {
+    function setMarkdownContent(markdown: string): void {
         if (options.markdownElement.value) {
             options.markdownElement.value.textContent = markdown;
         }
     }
 
-    async function setContent(markdown: string) {
+    async function setContent(markdown: string): Promise<void> {
         isSyncing = true;
 
-        const html = await markedService.parse(encodeText(markdown));
-        setTiptapContent(html);
+        setTiptapContent(markdownToHTML(markdown));
         setMarkdownContent(markdown);
 
         isSyncing = false;
     }
 
-    async function onMarkdownChanged(markdown: string) {
-        if (isSyncing) {
+    async function replaceContent(markdown: string): Promise<void> {
+        await setContent(markdown);
+        options.onUpdate(markdown);
+    }
+
+    async function onMarkdownChanged(markdown: string): Promise<void> {
+        if (collaboration || isSyncing) {
             return;
         }
 
         isSyncing = true;
 
-        const html = await markedService.parse(encodeText(markdown));
-        setTiptapContent(html);
+        setTiptapContent(markdownToHTML(markdown));
 
         isSyncing = false;
 
@@ -213,6 +244,8 @@ export function useEditor(options: SetupEditorOptions) {
     return {
         editor,
         setContent,
+        replaceContent,
         onMarkdownChanged,
+        readMarkdown,
     };
 }

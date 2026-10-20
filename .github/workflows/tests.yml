@@ -65,6 +65,15 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Install Yjs service dependencies
+        run: npm ci --prefix yjs-server
+
+      - name: Typecheck Yjs service
+        run: npm run typecheck --prefix yjs-server
+
+      - name: Test Yjs service
+        run: npm test --prefix yjs-server
+
       - name: Lint frontend
         run: npm run lint
 

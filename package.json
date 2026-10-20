@@ -42,11 +42,14 @@
     },
     "dependencies": {
         "@guyplusplus/turndown-plugin-gfm": "^1.0.7",
+        "@hocuspocus/provider": "^4.7.1",
         "@inertiajs/core": "^3.7.0",
         "@inertiajs/vue3": "^3.7.0",
         "@laravel/echo-vue": "^2.4.0",
         "@tiptap/core": "^3.30.5",
         "@tiptap/extension-code-block-lowlight": "^3.30.5",
+        "@tiptap/extension-collaboration": "^3.30.5",
+        "@tiptap/extension-collaboration-caret": "^3.30.5",
         "@tiptap/extension-image": "^3.30.5",
         "@tiptap/extension-link": "^3.30.5",
         "@tiptap/extension-table": "^3.30.5",
@@ -58,11 +61,13 @@
         "@tiptap/pm": "^3.30.5",
         "@tiptap/starter-kit": "^3.30.5",
         "@tiptap/vue-3": "^3.30.5",
+        "@tiptap/y-tiptap": "^3.0.10",
         "@vue/devtools-api": "^8.2.1",
         "lowlight": "^3.3.0",
         "marked": "^18.0.11",
         "pinia": "^4.0.3",
         "turndown": "^7.2.4",
-        "vue": "^3.5.41"
+        "vue": "^3.5.41",
+        "yjs": "^13.6.33"
     }
 }

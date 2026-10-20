@@ -9,6 +9,10 @@
 /storage/*.key
 /tests/Browser/Screenshots
 /vendor
+/yjs-server/node_modules
+/yjs-server/dist
+/yjs-server/coverage
+/yjs-server/.env
 .env
 .env.backup
 .env.production

@@ -31,6 +31,7 @@ Vaults are simply storage containers for your files, and Many Notes lets you cho
 - **Multiple vaults per user**: Choose how to organize your files
 - **OpenID Connect and OAuth**: Authenticate with most login providers
 - **Collaboration**: Invite other users to access your vaults
+- **Live co-editing**: Edit the same note together in real time with Yjs and Hocuspocus, including remote carets, selections and per-line presence chips
 - **Broadcasting**: Real-time, live-updating user interfaces
 - **File search**: Experience a fast and typo-tolerant search
 - **Tree view explorer**: Fast navigation with relevant actions in the context menu
@@ -94,6 +95,26 @@ Make sure to change the address used to access the application. Feel free to cha
 ```shell
 docker compose up -d
 ```
+
+### Live collaboration
+
+Live co-editing needs a small Hocuspocus service in addition to the app. The
+repository includes a complete `compose.yaml` (app, Yjs service and reverse
+proxy) and the service source in [`yjs-server`](./yjs-server). Set two different
+secrets and point `MANY_NOTES_IMAGE` at an image built from this fork:
+
+```shell
+export YJS_JWT_SECRET="$(openssl rand -hex 32)"
+export YJS_INTERNAL_TOKEN="$(openssl rand -hex 32)"
+export MANY_NOTES_IMAGE=many-notes:local
+docker compose up -d --build
+```
+
+The browser connects to the same origin at `/yjs`; the Hocuspocus port is never
+published. Markdown stays the materialized format for search, backlinks, tags,
+the filesystem and exports. Read the full [collaboration documentation](./docs/collaboration.md)
+for the architecture, seed and snapshot rules, reverse-proxy setup, and V1
+limitations.
 
 ## Customization
 

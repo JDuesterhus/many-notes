@@ -3,7 +3,6 @@ import VaultEditorApplyTemplateController from '@/actions/App/Http/Controllers/V
 import Menu from '@/components/menu/Menu.vue';
 import VaultEditorSearchFileModal from '@/components/modal/VaultEditorSearchModal.vue';
 import VaultEditorTemplateListModal from '@/components/modal/VaultEditorTemplateListModal.vue';
-import { useEditor } from '@/composables/useEditor';
 import { useModalManager } from '@/composables/useModalManager';
 import { useRequest } from '@/composables/useRequest';
 import { useTiptapPreferences } from '@/composables/useTiptapPreferences';
@@ -47,6 +46,7 @@ import Template from '@/icons/Template.vue';
 import Text from '@/icons/Text.vue';
 import Undo from '@/icons/Undo.vue';
 import { useLayoutStore } from '@/stores/layout';
+import { EditorContext } from '@/types/editor';
 import { computed, inject, type ShallowRef } from 'vue';
 import MarkdownToolbarButton from './MarkdownToolbarButton.vue';
 import MarkdownToolbarItemDivider from './MarkdownToolbarItemDivider.vue';
@@ -57,18 +57,27 @@ const props = defineProps<{
     nodeId: number;
 }>();
 
-const editorContext = inject<ShallowRef<ReturnType<typeof useEditor> | null>>('editorContext');
+const editorContext = inject<ShallowRef<EditorContext | null>>('editorContext');
 
 const layoutStore = useLayoutStore();
 const { openModal } = useModalManager();
 const { isEditMode, isEditingMarkdown, toggleEditMode, toggleEditingMarkdown } =
     useTiptapPreferences();
 
-const applyTemplateForm = useRequest<{ node_id: number }>({ node_id: props.nodeId });
+const applyTemplateForm = useRequest<{ node_id: number; content: string }>({
+    node_id: props.nodeId,
+    content: '',
+});
 
 const editor = computed(() => editorContext?.value?.editor.value ?? null);
 
 const isToolbarLocked = computed(() => !isEditMode.value || isEditingMarkdown.value);
+const isLive = computed(() => editorContext?.value?.isCollaborative ?? false);
+const markdownToggleTitle = computed(() =>
+    isLive.value
+        ? 'Live collaboration is currently only available in rich-text mode.'
+        : 'Toggle Markdown'
+);
 
 function undo(): void {
     editor.value?.chain().focus().undo().run();
@@ -238,8 +247,16 @@ function applyTemplateToVaultNode(templateId: number): void {
     layoutStore.setAppLoading(true);
 
     applyTemplateForm.node_id = props.nodeId;
+    applyTemplateForm.content = editorContext?.value?.readMarkdown() ?? '';
 
     applyTemplateForm.post(url, {
+        onSuccess: response => {
+            const content = (response as { data?: { content?: string } }).data?.content;
+
+            if (typeof content === 'string') {
+                void editorContext?.value?.replaceContent(content);
+            }
+        },
         onFinish: () => {
             layoutStore.setAppLoading(false);
         },
@@ -548,9 +565,10 @@ function print(): void {
         </div>
         <div class="flex gap-1">
             <MarkdownToolbarButton
-                title="Toggle Markdown"
+                :title="markdownToggleTitle"
                 :icon="Markdown"
                 :toggle="true"
+                :disabled="isLive"
                 :class="
                     isEditingMarkdown
                         ? 'bg-primary-400 dark:bg-primary-500 text-light-base-50! dark:text-light-base-50!'
