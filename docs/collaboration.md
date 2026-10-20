@@ -328,6 +328,9 @@ routes.
 - Awareness is not persisted.
 - No offline-first local database; offline edits survive only while the tab is
   open.
+- The compose stack uses `CACHE_STORE=file` for a single app container. A
+  multi-container/scale-out deployment must use a shared cache (for example
+  Redis) instead.
 - The final `sendBeacon` flush is subject to the browser's beacon payload limit;
   very large notes rely on the 2-second debounced snapshot for the last write.
 - No Electron/Tauri/Capacitor wrapper yet.
