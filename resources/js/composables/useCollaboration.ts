@@ -2,6 +2,7 @@ import VaultNodeSnapshotController from '@/actions/App/Http/Controllers/VaultNod
 import YjsSeedClaimController from '@/actions/App/Http/Controllers/YjsSeedClaimController';
 import YjsSeedCompleteController from '@/actions/App/Http/Controllers/YjsSeedCompleteController';
 import YjsTokenController from '@/actions/App/Http/Controllers/YjsTokenController';
+import { mergeMarkdown, replaceYText } from '@/services/collaborationMarkdown';
 import {
     beaconSnapshot,
     claimYjsSeed,
@@ -14,12 +15,16 @@ import { PresenceUser, YjsTokenResponse } from '@/types/collaboration';
 import { buildPresenceUser } from '@/utils/presence';
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
 import type { Editor } from '@tiptap/core';
-import { computed, onBeforeUnmount, ref, shallowRef, type Ref } from 'vue';
+import { computed, onBeforeUnmount, ref, shallowRef, watch, type Ref } from 'vue';
 import * as Y from 'yjs';
 
 const SNAPSHOT_DEBOUNCE = 2000;
 const SNAPSHOT_RETRY_DELAY = 5000;
 const SEED_WAIT_TIMEOUT = 15000;
+const EDIT_IDLE_TIMEOUT = 5000;
+const RICH_ORIGIN = 'many-notes:rich';
+const RAW_ORIGIN = 'many-notes:raw';
+const SEED_ORIGIN = 'many-notes:seed';
 
 interface UseNoteCollaborationOptions {
     vaultId: number;
@@ -29,6 +34,7 @@ interface UseNoteCollaborationOptions {
     enabled: boolean;
     url: string;
     isEditMode: Readonly<Ref<boolean>>;
+    isMarkdownMode: Readonly<Ref<boolean>>;
 }
 
 export type CollaborationStatus =
@@ -74,10 +80,15 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     const tokenError = ref<string | null>(null);
     const awarenessVersion = ref(0);
     const participants = ref<PresenceUser[]>([]);
+    const markdownVersion = ref(0);
+    const modeLocked = ref(false);
+    const modeLockedBy = ref<PresenceUser | null>(null);
+    const modeLockedMode = ref<'rich' | 'raw' | null>(null);
 
     const room = `vault:${options.vaultId}:node:${options.nodeId}`;
     const ydoc = options.enabled ? new Y.Doc() : null;
     const meta = ydoc?.getMap<unknown>('many-notes-meta') ?? null;
+    const ytext = ydoc?.getText('markdown') ?? null;
     const provider = shallowRef<HocuspocusProvider | null>(null);
     const localUser: PresenceUser = buildPresenceUser(options.user.id, options.user.name);
 
@@ -90,6 +101,11 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     let baseSeq = 0;
     let lastMarkdown = options.markdown;
     let lastSentMarkdown = options.markdown;
+    let lastRichMarkdown: string | null = null;
+    let lastProjectionOwner: number | null = null;
+    let editingActive = false;
+    let editingTimer: ReturnType<typeof setTimeout> | null = null;
+    let richProjectionTimer: ReturnType<typeof setTimeout> | null = null;
     let snapshotTimer: ReturnType<typeof setTimeout> | null = null;
     let snapshotRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let tokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -114,38 +130,173 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         status.value = next;
     }
 
+    interface EditingState {
+        clientId: number;
+        user: PresenceUser;
+        mode: 'rich' | 'raw';
+        editingSince: number;
+    }
+
     function updateParticipants(): void {
         const awareness = provider.value?.awareness;
 
         if (!awareness) {
             participants.value = [];
+            modeLocked.value = false;
+            modeLockedBy.value = null;
+            modeLockedMode.value = null;
+            return;
+        }
+
+        if (destroyed) {
             return;
         }
 
         const ownClientId = awareness.clientID;
+        const localMode: 'rich' | 'raw' = options.isMarkdownMode.value ? 'raw' : 'rich';
         const users: PresenceUser[] = [];
+        const editors: EditingState[] = [];
 
-        awareness.getStates().forEach((state, clientId) => {
-            if (clientId === ownClientId || destroyed) {
-                return;
+        awareness.getStates().forEach((rawState, clientId) => {
+            const state = rawState as {
+                user?: PresenceUser;
+                mode?: 'rich' | 'raw';
+                editing?: boolean;
+                editingSince?: number;
+            };
+            const user = state.user;
+
+            if (user && typeof user.id === 'string') {
+                if (clientId !== ownClientId) {
+                    users.push({
+                        id: user.id,
+                        name: user.name || 'User',
+                        initials: user.initials || '?',
+                        color: user.color || '#2563eb',
+                    });
+                }
+
+                if (state.editing === true) {
+                    editors.push({
+                        clientId,
+                        user: {
+                            id: user.id,
+                            name: user.name || 'User',
+                            initials: user.initials || '?',
+                            color: user.color || '#2563eb',
+                        },
+                        mode: state.mode === 'raw' ? 'raw' : 'rich',
+                        editingSince:
+                            typeof state.editingSince === 'number' ? state.editingSince : 0,
+                    });
+                }
             }
-
-            const user = (state as { user?: PresenceUser }).user;
-
-            if (!user || typeof user.id !== 'string') {
-                return;
-            }
-
-            users.push({
-                id: user.id,
-                name: user.name || 'User',
-                initials: user.initials || '?',
-                color: user.color || '#2563eb',
-            });
         });
 
         participants.value = users.sort((a, b) => a.id.localeCompare(b.id));
         awarenessVersion.value++;
+
+        const rawOwner =
+            editors
+                .filter(editor => editor.mode === 'raw')
+                .sort((a, b) => a.clientId - b.clientId)[0]?.clientId ?? null;
+        const previousOwner = lastProjectionOwner;
+
+        if (rawOwner !== previousOwner) {
+            if (previousOwner === ownClientId) {
+                if (richProjectionTimer) {
+                    clearTimeout(richProjectionTimer);
+                    richProjectionTimer = null;
+                }
+
+                // No raw editor remains: flush this editor's last projection
+                // before releasing ownership. If another raw editor took over,
+                // that editor will project instead.
+                if (rawOwner === null && ytext) {
+                    void applyMarkdownToRich(ytext.toString());
+                }
+            }
+
+            lastProjectionOwner = rawOwner;
+
+            if (rawOwner === ownClientId && options.isMarkdownMode.value) {
+                scheduleRichProjection();
+            }
+        }
+
+        const winner = editors.sort(
+            (a, b) => a.editingSince - b.editingSince || a.clientId - b.clientId
+        )[0];
+
+        if (winner && winner.clientId !== ownClientId && winner.mode !== localMode) {
+            modeLocked.value = true;
+            modeLockedBy.value = winner.user;
+            modeLockedMode.value = winner.mode;
+
+            if (editingActive) {
+                endEditing();
+            }
+        } else {
+            modeLocked.value = false;
+            modeLockedBy.value = null;
+            modeLockedMode.value = null;
+        }
+    }
+
+    function setAwarenessField(field: string, value: unknown): void {
+        provider.value?.setAwarenessField(field, value);
+    }
+
+    function endEditing(): void {
+        if (!editingActive) {
+            return;
+        }
+
+        editingActive = false;
+        setAwarenessField('editing', false);
+        setAwarenessField('editingSince', 0);
+
+        if (editingTimer) {
+            clearTimeout(editingTimer);
+            editingTimer = null;
+        }
+    }
+
+    function resetEditingTimer(): void {
+        if (editingTimer) {
+            clearTimeout(editingTimer);
+        }
+
+        editingTimer = setTimeout(() => {
+            endEditing();
+        }, EDIT_IDLE_TIMEOUT);
+    }
+
+    /**
+     * Claims the note-wide edit lease. Rich and raw editors may view a note at
+     * the same time, but only one representation is edited at a time.
+     */
+    function beginEditing(): boolean {
+        if (!isReady.value || destroyed || !canEdit.value || modeLocked.value) {
+            return false;
+        }
+
+        editingActive = true;
+        setAwarenessField('editing', true);
+        setAwarenessField('editingSince', Date.now());
+        resetEditingTimer();
+
+        return true;
+    }
+
+    function noteEditingActivity(): void {
+        if (!editingActive) {
+            beginEditing();
+
+            return;
+        }
+
+        resetEditingTimer();
     }
 
     function refreshTokenTimer(expiresAt: string): void {
@@ -222,27 +373,91 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         }
     }
 
+    function currentMarkdown(): string {
+        const text = ytext?.toString() ?? '';
+
+        if (text.length === 0 && getEditorMarkdown) {
+            return getEditorMarkdown();
+        }
+
+        return text;
+    }
+
+    async function applyMarkdownToRich(markdown: string): Promise<void> {
+        if (!editor || !setEditorContent || destroyed || markdown === lastRichMarkdown) {
+            return;
+        }
+
+        lastRichMarkdown = markdown;
+
+        await setEditorContent(markdown);
+    }
+
+    function isProjectionOwner(): boolean {
+        const awareness = provider.value?.awareness;
+
+        if (!awareness) {
+            return true;
+        }
+
+        const ownClientId = awareness.clientID;
+        const owner = [...awareness.getStates().entries()]
+            .filter(([, state]) => {
+                const rawState = state as { mode?: 'rich' | 'raw'; editing?: boolean };
+
+                return rawState.mode === 'raw' && rawState.editing === true;
+            })
+            .map(([clientId]) => clientId)
+            .sort((a, b) => a - b)[0];
+
+        return owner === undefined || owner === ownClientId;
+    }
+
+    function scheduleRichProjection(): void {
+        if (richProjectionTimer) {
+            clearTimeout(richProjectionTimer);
+        }
+
+        richProjectionTimer = setTimeout(() => {
+            richProjectionTimer = null;
+
+            if (ytext) {
+                void applyMarkdownToRich(ytext.toString());
+            }
+        }, 120);
+    }
+
     function finishReady(): void {
         if (destroyed) {
             return;
         }
 
         isReady.value = true;
-        setStatus('connected');
 
-        if (editor) {
-            editor.setEditable(canEdit.value && options.isEditMode.value);
+        if (canEdit.value) {
+            setStatus('connected');
         }
 
-        const current = getEditorMarkdown?.() ?? options.markdown;
+        if (editor) {
+            editor.setEditable(canEdit.value && options.isEditMode.value && !modeLocked.value);
+        }
+
+        if (lastRichMarkdown === null && getEditorMarkdown) {
+            lastRichMarkdown = getEditorMarkdown();
+        }
+
+        const current = currentMarkdown();
         lastMarkdown = current;
 
         if (current !== lastSentMarkdown) {
-            lastSentMarkdown = options.markdown;
             scheduleSnapshot();
         } else {
             lastSentMarkdown = current;
         }
+    }
+
+    function getMarkdown(): string {
+        return currentMarkdown();
     }
 
     function markSeeded(): void {
@@ -250,11 +465,42 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         meta?.set('seeded_at', Date.now());
     }
 
+    function hasYjsContent(): boolean {
+        return (ydoc?.getXmlFragment('default').length ?? 0) > 0 || (ytext?.length ?? 0) > 0;
+    }
+
+    /**
+     * Older documents only have the rich fragment; raw-edited documents may
+     * only have the Markdown text after a reconnect. Fill the missing side
+     * before the editor becomes ready.
+     */
+    async function ensureMirrors(): Promise<void> {
+        if (!ydoc || !ytext) {
+            return;
+        }
+
+        const richLength = ydoc.getXmlFragment('default').length;
+        const textLength = ytext.length;
+
+        if (textLength > 0 && richLength === 0) {
+            await applyMarkdownToRich(ytext.toString());
+
+            return;
+        }
+
+        if (richLength > 0 && textLength === 0) {
+            const markdown = getEditorMarkdown?.() ?? options.markdown;
+            lastRichMarkdown = markdown;
+            replaceYText(ytext, markdown, SEED_ORIGIN);
+        }
+    }
+
     async function claimAndSeed(): Promise<void> {
         const deadline = Date.now() + SEED_WAIT_TIMEOUT;
 
         while (!destroyed && Date.now() < deadline) {
-            if (meta?.get('seeded') === true || (ydoc?.getXmlFragment('default').length ?? 0) > 0) {
+            if (meta?.get('seeded') === true || hasYjsContent()) {
+                await ensureMirrors();
                 finishReady();
 
                 return;
@@ -276,6 +522,12 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
                     }
 
                     await setEditorContent(options.markdown);
+                    lastRichMarkdown = options.markdown;
+
+                    if (ytext && ytext.length === 0) {
+                        replaceYText(ytext, options.markdown, SEED_ORIGIN);
+                    }
+
                     markSeeded();
 
                     await completeYjsSeed(
@@ -301,7 +553,8 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
                 }
             }
 
-            if (meta?.get('seeded') === true || (ydoc?.getXmlFragment('default').length ?? 0) > 0) {
+            if (meta?.get('seeded') === true || hasYjsContent()) {
+                await ensureMirrors();
                 finishReady();
 
                 return;
@@ -335,10 +588,11 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             }
         }
 
-        const hasContent = (ydoc?.getXmlFragment('default').length ?? 0) > 0;
         const hasMarker = meta?.get('seeded') === true;
 
-        if (hasMarker || hasContent) {
+        if (hasMarker || hasYjsContent()) {
+            await ensureMirrors();
+
             if (!hasMarker) {
                 markSeeded();
             }
@@ -472,12 +726,30 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             return;
         }
 
-        if (markdown === lastMarkdown) {
+        const current = ytext?.toString() ?? lastMarkdown;
+        const merged = mergeMarkdown(lastRichMarkdown ?? current, markdown, current);
+
+        lastRichMarkdown = markdown;
+
+        if (ytext) {
+            replaceYText(ytext, merged, RICH_ORIGIN);
+        }
+
+        if (merged === lastMarkdown) {
             return;
         }
 
-        lastMarkdown = markdown;
+        lastMarkdown = merged;
         scheduleSnapshot();
+    }
+
+    function onRawMarkdownChange(markdown: string): void {
+        if (!isReady.value || destroyed || !canEdit.value || !ytext) {
+            return;
+        }
+
+        noteEditingActivity();
+        replaceYText(ytext, markdown, RAW_ORIGIN);
     }
 
     function attachEditor(
@@ -507,6 +779,8 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         hadSynced = true;
 
         if (!canEdit.value) {
+            finishReady();
+
             return;
         }
 
@@ -560,16 +834,47 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     }
 
     function onWindowBlur(): void {
+        endEditing();
         void flush();
     }
 
     function onVisibilityChange(): void {
         if (document.visibilityState === 'hidden') {
+            endEditing();
             flushOnPageHide();
         }
     }
 
+    function textObserver(_event: Y.YTextEvent, transaction: Y.Transaction): void {
+        if (!ytext || destroyed) {
+            return;
+        }
+
+        const next = ytext.toString();
+        lastMarkdown = next;
+        markdownVersion.value++;
+
+        if (isReady.value && next !== lastSentMarkdown) {
+            scheduleSnapshot();
+        }
+
+        if (transaction.origin === RICH_ORIGIN || transaction.origin === SEED_ORIGIN) {
+            return;
+        }
+
+        if (
+            options.isMarkdownMode.value &&
+            editingActive &&
+            isProjectionOwner() &&
+            next !== lastRichMarkdown
+        ) {
+            scheduleRichProjection();
+        }
+    }
+
     if (options.enabled && ydoc) {
+        ytext?.observe(textObserver);
+
         provider.value = new HocuspocusProvider({
             url: resolveWebSocketUrl(options.url),
             name: room,
@@ -612,13 +917,44 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         });
 
         provider.value.setAwarenessField('user', localUser);
-        provider.value.setAwarenessField('mode', 'rich');
+        provider.value.setAwarenessField('mode', options.isMarkdownMode.value ? 'raw' : 'rich');
+        provider.value.setAwarenessField('editing', false);
+        provider.value.setAwarenessField('editingSince', 0);
 
         window.addEventListener('blur', onWindowBlur);
         document.addEventListener('visibilitychange', onVisibilityChange);
         window.addEventListener('pagehide', flushOnPageHide);
         window.addEventListener('beforeunload', flushOnPageHide);
     }
+
+    watch(options.isMarkdownMode, markdownMode => {
+        setAwarenessField('mode', markdownMode ? 'raw' : 'rich');
+        endEditing();
+
+        // Flush a projection that was still inside its 120 ms debounce before
+        // the rich editor becomes editable again. No timer means the active raw
+        // editor already projected the current Markdown.
+        if (!markdownMode && richProjectionTimer && ytext && !modeLocked.value) {
+            clearTimeout(richProjectionTimer);
+            richProjectionTimer = null;
+
+            void applyMarkdownToRich(ytext.toString());
+        }
+    });
+
+    watch(options.isEditMode, editMode => {
+        if (!editMode) {
+            endEditing();
+        }
+    });
+
+    watch(modeLocked, locked => {
+        if (locked) {
+            endEditing();
+        }
+
+        editor?.setEditable(canEdit.value && isReady.value && options.isEditMode.value && !locked);
+    });
 
     const editorOptions = computed(() =>
         options.enabled && ydoc && provider.value
@@ -631,7 +967,16 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     );
 
     onBeforeUnmount(() => {
+        endEditing();
         destroyed = true;
+
+        if (editingTimer) {
+            clearTimeout(editingTimer);
+        }
+
+        if (richProjectionTimer) {
+            clearTimeout(richProjectionTimer);
+        }
 
         if (snapshotTimer) {
             clearTimeout(snapshotTimer);
@@ -648,6 +993,8 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         if (seedTimer) {
             clearTimeout(seedTimer);
         }
+
+        ytext?.unobserve(textObserver);
 
         window.removeEventListener('blur', onWindowBlur);
         document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -677,13 +1024,23 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         tokenError,
         participants,
         awarenessVersion,
+        markdownVersion,
+        modeLocked,
+        modeLockedBy,
+        modeLockedMode,
         editorOptions,
         localUser,
         attachEditor,
         onContentChange,
+        onRawMarkdownChange,
+        getMarkdown,
+        beginEditing,
+        noteEditingActivity,
+        endEditing,
         flush,
         updateSnapshotSeq,
         ydoc,
+        ytext,
         provider,
     };
 }

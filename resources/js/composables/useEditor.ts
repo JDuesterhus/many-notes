@@ -15,12 +15,13 @@ import {
 } from '@/services/tiptap/extension-vault-file-upload';
 import { turndownService } from '@/services/turndown';
 import type { EditorCollaboration, PresenceUser } from '@/types/collaboration';
-import { Editor } from '@tiptap/core';
+import { createDocument, Editor } from '@tiptap/core';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import { Table, TableRow } from '@tiptap/extension-table';
 import TaskList from '@tiptap/extension-task-list';
 import StarterKit from '@tiptap/starter-kit';
+import { prosemirrorToYXmlFragment } from '@tiptap/y-tiptap';
 import { common, createLowlight } from 'lowlight';
 import { onMounted, onUnmounted, Ref, shallowRef, watch } from 'vue';
 
@@ -32,6 +33,8 @@ interface SetupEditorOptions {
     content: string;
     isEditMode: Readonly<Ref<boolean>>;
     onUpdate: (markdown: string) => void;
+    onFocus?: () => void;
+    onActivity?: () => void;
     onBlur?: () => void;
     openFilePath: (path: string) => void;
     uploadFiles: (request: VaultFileUploadRequest) => void;
@@ -171,6 +174,9 @@ export function useEditor(options: SetupEditorOptions) {
                     options.onEditorReady?.(instance, setContent, readMarkdown);
                 }
             },
+            onFocus() {
+                options.onFocus?.();
+            },
             onBlur() {
                 options.onBlur?.();
             },
@@ -186,6 +192,10 @@ export function useEditor(options: SetupEditorOptions) {
 
                 isSyncing = false;
 
+                if (editor.value?.isFocused) {
+                    options.onActivity?.();
+                }
+
                 options.onUpdate(markdown);
             },
         });
@@ -196,18 +206,46 @@ export function useEditor(options: SetupEditorOptions) {
     }
 
     function setMarkdownContent(markdown: string): void {
-        if (options.markdownElement.value) {
+        // In a live note the raw pane is driven by the shared Y.Text, not by
+        // the rich editor. Writing here would reset the raw caret on every
+        // remote update.
+        if (!collaboration && options.markdownElement.value) {
             options.markdownElement.value.textContent = markdown;
         }
     }
 
-    async function setContent(markdown: string): Promise<void> {
+    async function setLocalContent(markdown: string): Promise<void> {
         isSyncing = true;
 
         setTiptapContent(markdownToHTML(markdown));
         setMarkdownContent(markdown);
 
         isSyncing = false;
+    }
+
+    async function setContent(markdown: string): Promise<void> {
+        const instance = editor.value;
+
+        if (!instance || !collaboration) {
+            await setLocalContent(markdown);
+
+            return;
+        }
+
+        // In a collaborative editor, commands.setContent can insert a second
+        // copy into the shared fragment instead of replacing it. Replace the
+        // Y.XmlFragment directly and let ySync project it into TipTap.
+        isSyncing = true;
+
+        try {
+            const doc = createDocument(markdownToHTML(markdown), instance.schema);
+
+            collaboration.document.transact(() => {
+                prosemirrorToYXmlFragment(doc, collaboration.document.getXmlFragment('default'));
+            }, 'many-notes:rich-projection');
+        } finally {
+            isSyncing = false;
+        }
     }
 
     async function replaceContent(markdown: string): Promise<void> {
@@ -276,6 +314,10 @@ export function useEditor(options: SetupEditorOptions) {
 
         if (changed) {
             instance.view.dispatch(transaction);
+
+            if (!instance.isFocused) {
+                options.onUpdate(readMarkdown());
+            }
         }
     }
 

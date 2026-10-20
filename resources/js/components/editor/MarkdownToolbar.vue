@@ -72,12 +72,6 @@ const applyTemplateForm = useRequest<{ node_id: number; content: string }>({
 const editor = computed(() => editorContext?.value?.editor.value ?? null);
 
 const isToolbarLocked = computed(() => !isEditMode.value || isEditingMarkdown.value);
-const isLive = computed(() => editorContext?.value?.isCollaborative ?? false);
-const markdownToggleTitle = computed(() =>
-    isLive.value
-        ? 'Live collaboration is currently only available in rich-text mode.'
-        : 'Toggle Markdown'
-);
 
 function undo(): void {
     editor.value?.chain().focus().undo().run();
@@ -565,10 +559,9 @@ function print(): void {
         </div>
         <div class="flex gap-1">
             <MarkdownToolbarButton
-                :title="markdownToggleTitle"
+                title="Toggle Markdown"
                 :icon="Markdown"
                 :toggle="true"
-                :disabled="isLive"
                 :class="
                     isEditingMarkdown
                         ? 'bg-primary-400 dark:bg-primary-500 text-light-base-50! dark:text-light-base-50!'

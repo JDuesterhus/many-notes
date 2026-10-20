@@ -7,17 +7,19 @@ storage format used by search, backlinks, tags, the filesystem and exports.
 ## Architecture
 
 ```text
-Browser A ── TipTap + Collaboration ──┐
-                                      ├── HocuspocusProvider ── WSS /yjs ── Hocuspocus
-Browser B ── TipTap + Collaboration ──┘                                      │
-                                                                             ├── yjs.sqlite (binary state)
-                                                                             │
-Client debounced snapshot ── Markdown ── Laravel ── vault_nodes.content + file
-                                                                 │
-                                                                 └── Typesense / backlinks / tags
+Browser A ── TipTap XML fragment + Markdown Y.Text ──┐
+                                                     ├── HocuspocusProvider ── WSS /yjs ── Hocuspocus
+Browser B ── raw Markdown editor + Markdown Y.Text ──┘                                      │
+                                                                                             ├── yjs.sqlite (binary state)
+                                                                                             │
+Client debounced snapshot ── Markdown Y.Text ── Laravel ── vault_nodes.content + file
+                                                                    │
+                                                                    └── Typesense / backlinks / tags
 ```
 
-- **Live truth:** the Yjs document for the open note.
+- **Live truth:** the Yjs document for the open note. It contains the rich
+  `default` XML fragment and a `markdown` Y.Text. Both represent the same note;
+  a mode lease decides which representation may be edited at a given moment.
 - **Materialized truth:** `vault_nodes.content` and the Markdown file on disk.
 - **Metadata events:** Laravel Reverb still broadcasts tree, tag, notification,
   collaboration and snapshot-sequence events.
@@ -27,8 +29,10 @@ Client debounced snapshot ── Markdown ── Laravel ── vault_nodes.cont
 
 | Component | Responsibility |
 | --- | --- |
-| `resources/js/composables/useCollaboration.ts` | Y.Doc, provider, token refresh, seed handshake, snapshot scheduling, connection status |
+| `resources/js/composables/useCollaboration.ts` | Y.Doc, provider, token refresh, seed handshake, Markdown mirror, mode lease, snapshot scheduling, connection status |
 | `resources/js/composables/useEditor.ts` | TipTap + Collaboration + CollaborationCaret |
+| `resources/js/services/collaborationMarkdown.ts` | Minimal Markdown diff for Y.Text and the raw caret |
+| `resources/js/components/vault/VaultFileNote.vue` | Rich/raw panes and the collaborative raw editor |
 | `app/Http/Controllers/YjsTokenController.php` | Short-lived JWT for one note |
 | `app/Http/Controllers/YjsSeedClaimController.php` | Atomic one-time seed lease |
 | `app/Http/Controllers/VaultNodeSnapshotController.php` | Monotonic Markdown snapshots |
@@ -95,23 +99,29 @@ The seed is a **one-time client seed with a server-side lease**:
 - Laravel performs an atomic conditional update on
   `collaboration_documents.seed_claimed_at`. Only one client gets
   `claimed: true`.
-- The winner writes the Markdown into the Yjs document, sets the
-  `many-notes-meta` `seeded` marker inside the Y.Doc, and calls
-  `POST /api/yjs/seed-complete`.
-- Other clients watch the marker/fragment and never seed a second copy.
+- The winner writes the Markdown into both the rich XML fragment and the
+  `markdown` Y.Text, sets the `many-notes-meta` `seeded` marker inside the
+  Y.Doc, and calls `POST /api/yjs/seed-complete`.
+- Other clients watch the marker/fragment/text and never seed a second copy.
 - If the winner disappears before writing, the 30-second lease expires and
   another client can claim.
 - `seed-complete` requires the claim id, so a client that lost the race cannot
   mark the document as seeded.
 
 The Yjs document contains a `many-notes-meta` map with a `seeded` flag. This is
-metadata only; it is not part of the TipTap content.
+metadata only; it is not part of the note content.
+
+Older documents may only contain the rich fragment. On open, the client derives
+the missing `markdown` text from TipTap. A document that only has `markdown`
+after a raw edit is parsed into the rich fragment before the editor is enabled.
 
 ## Markdown snapshots
 
 Yjs is live, but the rest of the application needs Markdown. The client:
 
-- serializes TipTap to Markdown (2-second debounce);
+- keeps the shared `markdown` Y.Text in sync with TipTap and with the raw pane;
+- snapshots that Y.Text (2-second debounce), so rich and raw edits take the
+  same persistence path;
 - sends `PATCH /api/vaults/{vault}/nodes/{node}/snapshot` with
   `{ content, base_seq }`;
 - flushes immediately on blur, `visibilitychange` (via `sendBeacon`) and the
@@ -162,8 +172,10 @@ Awareness carries:
 ```js
 {
   user: { id, name, initials, color },
-  cursor: { anchor, head },
-  mode: 'rich'
+  cursor: { anchor, head }, // rich mode only
+  mode: 'rich' | 'raw',
+  editing: true,
+  editingSince: 1760000000000
 }
 ```
 
@@ -182,7 +194,14 @@ awareness update, so V1 intentionally keeps the single `cursor` field.
   user, with the full name as a tooltip.
 - Color is never the only identifier: the name label and avatar tooltip are
   always available.
+- In raw mode, the status row avatars and the read-only/locked notice carry
+  presence; the raw pane does not draw in-text remote carets.
 - Disconnecting removes the awareness state, caret and top avatar.
+
+`editing` is a short lease (five seconds of inactivity) used to keep rich and raw
+editors from writing over each other. A client may view the other mode, but it
+is read-only while a user in the other mode is editing. Multiple users in the
+same mode co-edit normally.
 
 Awareness is never persisted. The Hocuspocus provider batches outgoing
 document/awareness messages in an 80 ms window, which also throttles caret and
@@ -203,16 +222,38 @@ The editor shows one of:
 Snapshot failures are shown in the same status row and retried. They are never
 silently discarded.
 
-## Raw Markdown mode (V1 limitation)
+## Raw Markdown mode
 
-A live note has exactly one document: the Yjs document edited through TipTap.
-The raw `contenteditable` Markdown pane is therefore disabled for live notes and
-the toolbar button explains why. Opening a note while the old preference was
-enabled forces rich-text mode. Installations with `YJS_ENABLED=false` keep the
-legacy raw-Markdown behavior.
+Raw Markdown is available for live notes. The toolbar toggle switches the same
+Yjs note between:
 
-Keeping a second raw editor would create two sources of truth and allow silent
-data loss, so this is a deliberate V1 constraint rather than a missing feature.
+- the rich TipTap pane, backed by the `default` XML fragment;
+- the raw `contenteditable` pane, backed by the `markdown` Y.Text.
+
+Both representations live in one Y.Doc. The rich editor writes its serialized
+Markdown into `markdown`; the raw editor writes into `markdown`; the missing side
+is projected before the note becomes editable. Automatic snapshots always read
+`markdown`, so a note has one materialized representation regardless of which
+pane is open.
+
+Because Markdown and a rich document cannot be merged character-by-character
+across representations, the note has a **mode edit lease**:
+
+- multiple rich users can edit together;
+- multiple raw users can edit together through `Y.Text`;
+- a raw user and a rich user can view the same note at the same time, but only
+  the lease owner may type;
+- the other pane shows `Read only` with the owner's name and mode;
+- the lease is released on blur or after five seconds without input.
+
+Only one raw editor (the lowest awareness client id among active raw editors)
+projects `markdown` into the rich fragment. Every raw client writing a full
+fragment replacement would race and duplicate content; a single projector keeps
+the rich view current while Y.Text remains the raw-side CRDT.
+
+This prevents a full-document raw replacement from overwriting concurrent rich
+edits. Installations with `YJS_ENABLED=false`, and non-Markdown files such as
+`.txt`, keep the legacy raw editor and its existing save path.
 
 ## Deployment
 
@@ -329,7 +370,9 @@ routes.
 
 - Only `.md` notes are collaborative. `.txt` notes keep the legacy editor and
   are not co-editable, matching the room/file restriction.
-- Raw Markdown editing is disabled for live notes.
+- Raw mode has no in-text remote carets; presence is shown by the status-row
+  avatars and the mode lock notice.
+- Rich and raw editing are mutually exclusive per note while a lease is active.
 - Only SQLite is supported by the Hocuspocus authorization check out of the box.
 - No read-only collaborator role; every accepted collaborator can edit.
 - No public sharing, E2EE, comments or collaborative titles.
@@ -367,12 +410,17 @@ routes.
 5. Type in one window; the text appears in the other without a reload.
 6. Move the cursor; the colored caret, its name label and the connected-user
    avatar appear in the other window.
-7. Wait two seconds, then check `vault_nodes.content`, the Markdown file and the
+7. Toggle Markdown in one window. The raw pane shows the same note with its
+   Markdown syntax; type there and confirm the rich window updates live.
+8. Switch that window back to rich text. It shows the raw edit. While the raw
+   editor is active, the rich window must say `Read only` and name the raw
+   editor; after blur or five seconds it becomes editable again.
+9. Wait two seconds, then check `vault_nodes.content`, the Markdown file and the
    tags/backlinks panel.
-8. Reload one window; the content must remain and must not be duplicated.
-9. Stop the Yjs service, type in one window, restart the service, and confirm
-   the edits merge after reconnect.
-10. Remove user B from the vault; their status must change to `No permission`
+10. Reload one window; the content must remain and must not be duplicated.
+11. Stop the Yjs service, type in one window, restart the service, and confirm
+    the edits merge after reconnect.
+12. Remove user B from the vault; their status must change to `No permission`
     and the connection must close.
 
 ## Verification commands
@@ -384,6 +432,7 @@ php vendor/bin/phpstan analyse --no-progress
 php vendor/bin/pint --test
 
 # Frontend
+npm test
 npm run lint
 npm run format
 npm run typecheck
@@ -406,6 +455,7 @@ not committed.
 | --- | --- |
 | `composer analyse` (Rector, Pint, PHPCS, PHPStan level 10, type coverage) | passed; type coverage 100 % |
 | `composer test` (Pest, parallel) | 213 passed, 555 assertions |
+| `npm test` (Vitest, Markdown diff/merge) | 10 passed |
 | `npm run lint` / `npm run format` / `npm run typecheck` / `npm run build` | passed |
 | `yjs-server`: `npm run typecheck` | passed |
 | `yjs-server`: `npm test` | 19 passed |
@@ -419,6 +469,9 @@ not committed.
 | Revoked collaborator | status `No permission`, editor read-only, other user unchanged |
 | Both clients offline, both edit, reconnect | both edits merged, one seed only |
 | Two users edit different paragraphs | both markers present in both editors |
+| Raw Markdown on a live note | raw edits appeared in the rich pane; both raw users saw each other |
+| Rich/raw mode lease | rich pane became read-only with the raw editor's name, then editable on release |
+| Raw Markdown snapshot | `vault_nodes.content` and the Markdown file contained the raw edit |
 | Disconnect removes presence | caret and top avatar disappeared for the remaining user |
 | Large note (300 real blocks) | opened in ~1.5 s; edits synced |
 | Live link rewrite on rename | open editor link changed to the renamed path; snapshot kept it |
@@ -427,9 +480,9 @@ not committed.
 | NAS deployment (Docker Compose) | app + Yjs + Nginx proxy healthy at port 8070 |
 
 Playwright checks covered: live typing in both directions, caret name labels,
-connected-user avatars, database and file snapshots, reload,
-offline-edit/reconnect merge, disabled raw-Markdown toggle, revoke, provider
-cleanup, service restart and token expiry.
+connected-user avatars, rich/raw switching, raw Markdown co-editing, the
+mode edit lease, database and file snapshots, reload, offline-edit/reconnect
+merge, revoke, provider cleanup, service restart and token expiry.
 
 ### NAS deployment verification
 

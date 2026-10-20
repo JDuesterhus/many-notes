@@ -31,7 +31,7 @@ Vaults are simply storage containers for your files, and Many Notes lets you cho
 - **Multiple vaults per user**: Choose how to organize your files
 - **OpenID Connect and OAuth**: Authenticate with most login providers
 - **Collaboration**: Invite other users to access your vaults
-- **Live co-editing**: Edit the same note together in real time with Yjs and Hocuspocus, including remote carets, selections, name labels and connected-user avatars
+- **Live co-editing**: Edit the same note together in real time with Yjs and Hocuspocus, in rich text or raw Markdown, including remote carets, selections, name labels and connected-user avatars
 - **Broadcasting**: Real-time, live-updating user interfaces
 - **File search**: Experience a fast and typo-tolerant search
 - **Tree view explorer**: Fast navigation with relevant actions in the context menu
@@ -111,8 +111,9 @@ docker compose up -d --build
 ```
 
 The browser connects to the same origin at `/yjs`; the Hocuspocus port is never
-published. Markdown stays the materialized format for search, backlinks, tags,
-the filesystem and exports. Read the full [collaboration documentation](./docs/collaboration.md)
+published. Rich text and raw Markdown are both live editors; a per-note edit
+lease keeps them from overwriting each other. Markdown stays the materialized
+format for search, backlinks, tags, the filesystem and exports. Read the full [collaboration documentation](./docs/collaboration.md)
 for the architecture, seed and snapshot rules, reverse-proxy setup, and V1
 limitations.
 

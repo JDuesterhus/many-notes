@@ -11,6 +11,9 @@ const props = defineProps<{
     snapshotError: string | null;
     tokenError: string | null;
     canEdit: boolean;
+    modeLocked: boolean;
+    modeLockedBy: PresenceUser | null;
+    modeLockedMode: 'rich' | 'raw' | null;
 }>();
 
 const label = computed(() => {
@@ -18,7 +21,7 @@ const label = computed(() => {
         case 'connecting':
             return 'Connecting…';
         case 'connected':
-            return props.canEdit ? 'Live' : 'Read only';
+            return props.canEdit && !props.modeLocked ? 'Live' : 'Read only';
         case 'reconnecting':
             return 'Reconnecting…';
         case 'offline':
@@ -53,7 +56,19 @@ const tone = computed(() => {
     }
 });
 
-const detail = computed(() => props.tokenError ?? props.snapshotError ?? '');
+const modeLockDetail = computed(() => {
+    if (!props.modeLocked || !props.modeLockedBy) {
+        return '';
+    }
+
+    const mode = props.modeLockedMode === 'raw' ? 'Markdown' : 'rich text';
+
+    return `${props.modeLockedBy.name} is editing in ${mode} mode.`;
+});
+
+const detail = computed(
+    () => props.tokenError ?? props.snapshotError ?? modeLockDetail.value ?? ''
+);
 </script>
 
 <template>
@@ -66,6 +81,9 @@ const detail = computed(() => props.tokenError ?? props.snapshotError ?? '');
         <span class="flex items-center gap-1.5" :class="tone">
             <span class="h-1.5 w-1.5 rounded-full bg-current"></span>
             <span>{{ label }}</span>
+        </span>
+        <span v-if="modeLockDetail" class="text-warning-600 dark:text-warning-500">
+            {{ modeLockDetail }}
         </span>
         <span
             v-if="snapshotError"

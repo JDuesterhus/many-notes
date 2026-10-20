@@ -23,7 +23,9 @@ export interface AwarenessCursor {
 export interface AwarenessUserState {
     user?: PresenceUser;
     cursor?: AwarenessCursor | null;
-    mode?: 'rich';
+    mode?: 'rich' | 'raw';
+    editing?: boolean;
+    editingSince?: number;
 }
 
 export interface YjsTokenResponse {
