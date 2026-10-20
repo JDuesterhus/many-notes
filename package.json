@@ -43,6 +43,11 @@
         "vue-tsc": "^3.3.11"
     },
     "dependencies": {
+        "@codemirror/commands": "^6.11.1",
+        "@codemirror/lang-markdown": "^6.5.2",
+        "@codemirror/language": "^6.13.1",
+        "@codemirror/state": "^6.7.6",
+        "@codemirror/view": "^6.43.15",
         "@guyplusplus/turndown-plugin-gfm": "^1.0.7",
         "@hocuspocus/provider": "^4.7.1",
         "@inertiajs/core": "^3.7.0",
@@ -65,12 +70,15 @@
         "@tiptap/vue-3": "^3.30.5",
         "@tiptap/y-tiptap": "^3.0.10",
         "@vue/devtools-api": "^8.2.1",
+        "codemirror": "^6.0.2",
         "lowlight": "^3.3.0",
         "marked": "^18.0.11",
         "node-diff3": "^3.2.1",
         "pinia": "^4.0.3",
         "turndown": "^7.2.4",
         "vue": "^3.5.41",
+        "y-codemirror.next": "^0.3.6",
+        "y-protocols": "^1.0.7",
         "yjs": "^13.6.33"
     }
 }

@@ -13,16 +13,18 @@ export interface PresenceUser {
     name: string;
     initials: string;
     color: string;
+    mode?: 'rich' | 'raw';
 }
 
-export interface AwarenessCursor {
-    anchor: unknown;
-    head: unknown;
+export interface AwarenessCursor<T = unknown> {
+    anchor: T;
+    head: T;
 }
 
 export interface AwarenessUserState {
     user?: PresenceUser;
     cursor?: AwarenessCursor | null;
+    rawCursor?: AwarenessCursor | null;
     mode?: 'rich' | 'raw';
     editing?: boolean;
     editingSince?: number;

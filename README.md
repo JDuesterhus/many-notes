@@ -111,9 +111,10 @@ docker compose up -d --build
 ```
 
 The browser connects to the same origin at `/yjs`; the Hocuspocus port is never
-published. Rich text and raw Markdown are both live editors; a per-note edit
-lease keeps them from overwriting each other. Markdown stays the materialized
-format for search, backlinks, tags, the filesystem and exports. Read the full [collaboration documentation](./docs/collaboration.md)
+published. Rich text and raw Markdown are both live editors, with remote
+carets in both modes and rich edits taking priority while raw changes are
+projected in as typing pauses. Markdown stays the materialized format for
+search, backlinks, tags, the filesystem and exports. Read the full [collaboration documentation](./docs/collaboration.md)
 for the architecture, seed and snapshot rules, reverse-proxy setup, and V1
 limitations.
 

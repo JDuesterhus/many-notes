@@ -11,9 +11,6 @@ const props = defineProps<{
     snapshotError: string | null;
     tokenError: string | null;
     canEdit: boolean;
-    modeLocked: boolean;
-    modeLockedBy: PresenceUser | null;
-    modeLockedMode: 'rich' | 'raw' | null;
 }>();
 
 const label = computed(() => {
@@ -21,7 +18,7 @@ const label = computed(() => {
         case 'connecting':
             return 'Connecting…';
         case 'connected':
-            return props.canEdit && !props.modeLocked ? 'Live' : 'Read only';
+            return props.canEdit ? 'Live' : 'Read only';
         case 'reconnecting':
             return 'Reconnecting…';
         case 'offline':
@@ -56,19 +53,7 @@ const tone = computed(() => {
     }
 });
 
-const modeLockDetail = computed(() => {
-    if (!props.modeLocked || !props.modeLockedBy) {
-        return '';
-    }
-
-    const mode = props.modeLockedMode === 'raw' ? 'Markdown' : 'rich text';
-
-    return `${props.modeLockedBy.name} is editing in ${mode} mode.`;
-});
-
-const detail = computed(
-    () => props.tokenError ?? props.snapshotError ?? modeLockDetail.value ?? ''
-);
+const detail = computed(() => props.tokenError ?? props.snapshotError ?? '');
 </script>
 
 <template>
@@ -82,9 +67,6 @@ const detail = computed(
             <span class="h-1.5 w-1.5 rounded-full bg-current"></span>
             <span>{{ label }}</span>
         </span>
-        <span v-if="modeLockDetail" class="text-warning-600 dark:text-warning-500">
-            {{ modeLockDetail }}
-        </span>
         <span
             v-if="snapshotError"
             class="text-error-600 dark:text-error-500"
@@ -97,7 +79,9 @@ const detail = computed(
             :key="participant.id"
             class="inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-semibold text-white"
             :style="{ backgroundColor: participant.color }"
-            :title="participant.name"
+            :title="
+                participant.mode === 'raw' ? `${participant.name} · Markdown` : participant.name
+            "
         >
             {{ participant.initials }}
         </span>

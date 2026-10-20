@@ -21,7 +21,7 @@ import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import { Table, TableRow } from '@tiptap/extension-table';
 import TaskList from '@tiptap/extension-task-list';
 import StarterKit from '@tiptap/starter-kit';
-import { prosemirrorToYXmlFragment } from '@tiptap/y-tiptap';
+import { prosemirrorToYXmlFragment, ySyncPluginKey } from '@tiptap/y-tiptap';
 import { common, createLowlight } from 'lowlight';
 import { onMounted, onUnmounted, Ref, shallowRef, watch } from 'vue';
 
@@ -33,6 +33,7 @@ interface SetupEditorOptions {
     content: string;
     isEditMode: Readonly<Ref<boolean>>;
     onUpdate: (markdown: string) => void;
+    onRemoteUpdate?: (markdown: string) => void;
     onFocus?: () => void;
     onActivity?: () => void;
     onBlur?: () => void;
@@ -67,6 +68,7 @@ export function useEditor(options: SetupEditorOptions) {
     const editor = shallowRef<Editor | null>(null);
     const collaboration = options.collaboration ?? null;
     let isSyncing: boolean = true;
+    let isRemoteTransaction: boolean = false;
 
     const content = !collaboration && options.content ? markdownToHTML(options.content) : '';
 
@@ -180,6 +182,12 @@ export function useEditor(options: SetupEditorOptions) {
             onBlur() {
                 options.onBlur?.();
             },
+            onTransaction({ transaction }) {
+                const meta = transaction.getMeta(ySyncPluginKey) as
+                    { isChangeOrigin?: boolean } | undefined;
+
+                isRemoteTransaction = meta?.isChangeOrigin === true;
+            },
             onUpdate() {
                 if (isSyncing) {
                     return;
@@ -191,6 +199,15 @@ export function useEditor(options: SetupEditorOptions) {
                 setMarkdownContent(markdown);
 
                 isSyncing = false;
+
+                const isLocal = !isRemoteTransaction;
+                isRemoteTransaction = false;
+
+                if (!isLocal) {
+                    options.onRemoteUpdate?.(markdown);
+
+                    return;
+                }
 
                 if (editor.value?.isFocused) {
                     options.onActivity?.();
@@ -315,7 +332,7 @@ export function useEditor(options: SetupEditorOptions) {
         if (changed) {
             instance.view.dispatch(transaction);
 
-            if (!instance.isFocused) {
+            if (collaboration && !instance.isFocused) {
                 options.onUpdate(readMarkdown());
             }
         }

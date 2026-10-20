@@ -19,7 +19,8 @@ Client debounced snapshot ── Markdown Y.Text ── Laravel ── vault_nod
 
 - **Live truth:** the Yjs document for the open note. It contains the rich
   `default` XML fragment and a `markdown` Y.Text. Both represent the same note;
-  a mode lease decides which representation may be edited at a given moment.
+  rich typing keeps priority while raw changes are projected in when rich typing
+  pauses.
 - **Materialized truth:** `vault_nodes.content` and the Markdown file on disk.
 - **Metadata events:** Laravel Reverb still broadcasts tree, tag, notification,
   collaboration and snapshot-sequence events.
@@ -29,10 +30,11 @@ Client debounced snapshot ── Markdown Y.Text ── Laravel ── vault_nod
 
 | Component | Responsibility |
 | --- | --- |
-| `resources/js/composables/useCollaboration.ts` | Y.Doc, provider, token refresh, seed handshake, Markdown mirror, mode lease, snapshot scheduling, connection status |
+| `resources/js/composables/useCollaboration.ts` | Y.Doc, provider, token refresh, seed handshake, Markdown mirror, projection election, snapshot scheduling, connection status |
 | `resources/js/composables/useEditor.ts` | TipTap + Collaboration + CollaborationCaret |
-| `resources/js/services/collaborationMarkdown.ts` | Minimal Markdown diff for Y.Text and the raw caret |
-| `resources/js/components/vault/VaultFileNote.vue` | Rich/raw panes and the collaborative raw editor |
+| `resources/js/services/collaborationMarkdown.ts` | Minimal Markdown diff and three-way merge for the shared Y.Text |
+| `resources/js/components/editor/RawMarkdownEditor.vue` | CodeMirror 6 raw editor, Y.Text binding and raw remote carets |
+| `resources/js/components/vault/VaultFileNote.vue` | Rich/raw pane switching and lifecycle |
 | `app/Http/Controllers/YjsTokenController.php` | Short-lived JWT for one note |
 | `app/Http/Controllers/YjsSeedClaimController.php` | Atomic one-time seed lease |
 | `app/Http/Controllers/VaultNodeSnapshotController.php` | Monotonic Markdown snapshots |
@@ -172,7 +174,8 @@ Awareness carries:
 ```js
 {
   user: { id, name, initials, color },
-  cursor: { anchor, head }, // rich mode only
+  cursor: { anchor, head }, // rich mode only, Yjs relative positions
+  rawCursor: { anchor, head }, // raw mode only, Yjs relative positions
   mode: 'rich' | 'raw',
   editing: true,
   editingSince: 1760000000000
@@ -183,25 +186,32 @@ Awareness carries:
 the caret (`anchor === head`) and the selected range (`anchor !== head`); a
 separate `selection` field would duplicate the same positions in every
 awareness update, so V1 intentionally keeps the single `cursor` field.
+`rawCursor` is the equivalent for the CodeMirror raw pane. It uses Yjs relative
+positions too, so it survives edits on either side. A small awareness proxy
+translates CodeMirror's `cursor` field to `rawCursor`, keeping the raw and rich
+cursor fields independent.
 
 - Colors are deterministic from the user id and use a palette readable in light
   and dark themes.
 - The server overwrites client-supplied identity fields, so a client cannot
   impersonate another user.
 - `CollaborationCaret` renders the colored caret, the name label above the
-  caret and the selection highlight.
+  caret and the selection highlight in rich mode.
+- Raw mode uses CodeMirror's remote caret and selection decorations, with the
+  same colored name labels.
 - The editor status row shows compact initials avatars for every connected
   user, with the full name as a tooltip.
 - Color is never the only identifier: the name label and avatar tooltip are
   always available.
-- In raw mode, the status row avatars and the read-only/locked notice carry
-  presence; the raw pane does not draw in-text remote carets.
-- Disconnecting removes the awareness state, caret and top avatar.
+- Disconnecting removes the awareness state, both caret types and the top
+  avatar.
 
-`editing` is a short lease (five seconds of inactivity) used to keep rich and raw
-editors from writing over each other. A client may view the other mode, but it
-is read-only while a user in the other mode is editing. Multiple users in the
-same mode co-edit normally.
+`editing` is a short 1.5-second activity flag, not a lock. It tells the raw
+projector when a rich editor is actively typing so the full-fragment update can
+wait for a pause. Rich users keep their editable editor and carets the whole
+time. Raw users see rich edits immediately through the `markdown` mirror; rich
+users see raw edits as soon as rich typing pauses. Multiple raw users and
+multiple rich users can each co-edit normally.
 
 Awareness is never persisted. The Hocuspocus provider batches outgoing
 document/awareness messages in an 80 ms window, which also throttles caret and
@@ -231,25 +241,28 @@ Yjs note between:
 - the raw `contenteditable` pane, backed by the `markdown` Y.Text.
 
 Both representations live in one Y.Doc. The rich editor writes its serialized
-Markdown into `markdown`; the raw editor writes into `markdown`; the missing side
-is projected before the note becomes editable. Automatic snapshots always read
-`markdown`, so a note has one materialized representation regardless of which
-pane is open.
+Markdown into `markdown`; the raw pane is CodeMirror 6 bound to the same
+`Y.Text` through `y-codemirror.next`; the missing side is projected before the
+note becomes editable. Automatic snapshots always read `markdown`, so a note has
+one materialized representation regardless of which pane is open.
 
 Because Markdown and a rich document cannot be merged character-by-character
-across representations, the note has a **mode edit lease**:
+across representations, raw projection follows a **rich-first priority**:
 
-- multiple rich users can edit together;
-- multiple raw users can edit together through `Y.Text`;
-- a raw user and a rich user can view the same note at the same time, but only
-  the lease owner may type;
-- the other pane shows `Read only` with the owner's name and mode;
-- the lease is released on blur or after five seconds without input.
+- rich users always keep an editable editor and their remote carets;
+- raw users edit the shared `markdown` Y.Text and get their own remote carets;
+- rich edits are mirrored into `markdown` immediately, so raw users see them
+  while both modes are active;
+- raw changes are projected into the rich fragment once no rich editor has been
+  active for 1.5 seconds (or immediately when nobody is typing rich);
+- multiple raw users co-edit through `Y.Text`; multiple rich users co-edit
+  through the XML fragment.
 
-Only one raw editor (the lowest awareness client id among active raw editors)
-projects `markdown` into the rich fragment. Every raw client writing a full
-fragment replacement would race and duplicate content; a single projector keeps
-the rich view current while Y.Text remains the raw-side CRDT.
+Only one raw editor (the lowest awareness client id among active raw editors,
+or one elected connected client when nobody is typing raw) projects `markdown`
+into the rich fragment. Every raw client writing a full fragment replacement
+would race and duplicate content; a single projector keeps the rich view current
+while Y.Text remains the raw-side CRDT.
 
 This prevents a full-document raw replacement from overwriting concurrent rich
 edits. Installations with `YJS_ENABLED=false`, and non-Markdown files such as
@@ -370,9 +383,12 @@ routes.
 
 - Only `.md` notes are collaborative. `.txt` notes keep the legacy editor and
   are not co-editable, matching the room/file restriction.
-- Raw mode has no in-text remote carets; presence is shown by the status-row
-  avatars and the mode lock notice.
-- Rich and raw editing are mutually exclusive per note while a lease is active.
+- Raw changes reach the rich pane when rich typing pauses (1.5-second activity
+  window); this keeps the rich XML fragment from being replaced while a rich
+  user is mid-edit.
+- A true same-line conflict between a rich edit and a raw edit is resolved
+  line-wise; the rich CRDT remains authoritative for the rich pane and the raw
+  text remains authoritative for the raw pane until the next projection.
 - Only SQLite is supported by the Hocuspocus authorization check out of the box.
 - No read-only collaborator role; every accepted collaborator can edit.
 - No public sharing, E2EE, comments or collaborative titles.
@@ -411,10 +427,10 @@ routes.
 6. Move the cursor; the colored caret, its name label and the connected-user
    avatar appear in the other window.
 7. Toggle Markdown in one window. The raw pane shows the same note with its
-   Markdown syntax; type there and confirm the rich window updates live.
-8. Switch that window back to rich text. It shows the raw edit. While the raw
-   editor is active, the rich window must say `Read only` and name the raw
-   editor; after blur or five seconds it becomes editable again.
+   Markdown syntax and the other user's raw caret/name label.
+8. Keep the second window in rich text. It stays editable, keeps the existing
+   rich carets, and shows the raw edit after rich typing pauses. Switch both
+   windows to Markdown and confirm each shows the other's raw caret.
 9. Wait two seconds, then check `vault_nodes.content`, the Markdown file and the
    tags/backlinks panel.
 10. Reload one window; the content must remain and must not be duplicated.
@@ -470,7 +486,9 @@ not committed.
 | Both clients offline, both edit, reconnect | both edits merged, one seed only |
 | Two users edit different paragraphs | both markers present in both editors |
 | Raw Markdown on a live note | raw edits appeared in the rich pane; both raw users saw each other |
-| Rich/raw mode lease | rich pane became read-only with the raw editor's name, then editable on release |
+| Rich/raw coexistence | rich users stayed editable, carets survived a raw editor joining, raw edits appeared after rich typing paused |
+| Raw remote carets | two raw editors saw each other's caret, label and selection |
+| Raw editor newlines | Enter created a new CodeMirror line and the snapshot kept the line break |
 | Raw Markdown snapshot | `vault_nodes.content` and the Markdown file contained the raw edit |
 | Disconnect removes presence | caret and top avatar disappeared for the remaining user |
 | Large note (300 real blocks) | opened in ~1.5 s; edits synced |
@@ -480,9 +498,10 @@ not committed.
 | NAS deployment (Docker Compose) | app + Yjs + Nginx proxy healthy at port 8070 |
 
 Playwright checks covered: live typing in both directions, caret name labels,
-connected-user avatars, rich/raw switching, raw Markdown co-editing, the
-mode edit lease, database and file snapshots, reload, offline-edit/reconnect
-merge, revoke, provider cleanup, service restart and token expiry.
+connected-user avatars, rich/raw switching, raw Markdown co-editing, raw remote
+carets, rich caret persistence while raw users edit, database and file
+snapshots, reload, offline-edit/reconnect merge, revoke, provider cleanup,
+service restart and token expiry.
 
 ### NAS deployment verification
 
