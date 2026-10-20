@@ -22,7 +22,7 @@ beforeEach(function (): void {
     config()->set('yjs.jwt_audience', 'many-notes-yjs');
     config()->set('yjs.token_ttl', 300);
     config()->set('yjs.internal_url', '');
-    config()->set('yjs.internal_token', '');
+    config()->set('yjs.internal_token', 'test-internal-token');
 });
 
 it('does not issue tokens when collaboration is disabled', function (): void {

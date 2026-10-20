@@ -25,6 +25,11 @@ final readonly class YjsTokenController
     ): JsonResponse {
         abort_unless(config()->boolean('yjs.enabled'), 503, 'Collaboration is disabled.');
         abort_if(config()->string('yjs.jwt_secret') === '', 503, 'Collaboration is not configured.');
+        abort_if(
+            config()->string('yjs.internal_token') === '',
+            503,
+            'Collaboration is not configured.',
+        );
 
         /** @var array{vault_id: int, node_id: int} $data */
         $data = $request->validated();
