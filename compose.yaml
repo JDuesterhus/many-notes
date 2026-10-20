@@ -10,6 +10,8 @@ services:
             - YJS_JWT_SECRET=${YJS_JWT_SECRET:?Set YJS_JWT_SECRET in a .env file or the shell}
             - YJS_INTERNAL_TOKEN=${YJS_INTERNAL_TOKEN:?Set YJS_INTERNAL_TOKEN in a .env file or the shell}
             - YJS_INTERNAL_URL=http://yjs:1234
+            - CACHE_STORE=file
+            - DB_BUSY_TIMEOUT=5000
         volumes:
             - database:/var/www/html/database/sqlite
             - logs:/var/www/html/storage/logs

@@ -25,6 +25,12 @@ function csrfToken(): string {
     return document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '';
 }
 
+function xsrfCookie(): string | null {
+    const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+
+    return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
 export function csrfFormToken(): string {
     return csrfToken();
 }
@@ -32,8 +38,17 @@ export function csrfFormToken(): string {
 export async function collaborationRequest<T>(url: string, options: RequestOptions): Promise<T> {
     const headers: Record<string, string> = {
         Accept: 'application/json',
-        'X-CSRF-TOKEN': csrfToken(),
     };
+
+    // The cookie is refreshed on every Laravel response; the meta tag can lag
+    // behind a session regeneration during Inertia navigation.
+    const cookieToken = xsrfCookie();
+
+    if (cookieToken) {
+        headers['X-XSRF-TOKEN'] = cookieToken;
+    } else {
+        headers['X-CSRF-TOKEN'] = csrfToken();
+    }
 
     if (options.body !== undefined) {
         headers['Content-Type'] = 'application/json';

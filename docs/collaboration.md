@@ -266,12 +266,13 @@ Nginx requirements:
 
 ```nginx
 location /yjs {
-    rewrite ^/yjs(.*)$ $1 break;
+    rewrite ^/yjs/?(.*)$ /$1 break;
     proxy_pass http://yjs:1234;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Host $http_host;
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
     proxy_buffering off;
