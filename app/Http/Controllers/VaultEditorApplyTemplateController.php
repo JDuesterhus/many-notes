@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Models\Vault;
 use App\Models\VaultNode;
 use Illuminate\Container\Attributes\CurrentUser;
+use Illuminate\Http\JsonResponse;
 
 final readonly class VaultEditorApplyTemplateController
 {
@@ -19,15 +20,24 @@ final readonly class VaultEditorApplyTemplateController
         VaultNode $template,
         #[CurrentUser] User $user,
         ApplyTemplateToVaultNode $applyTemplateToVaultNode,
-    ): void {
-        abort_unless($user->can('view', $vault), 403);
+    ): JsonResponse {
+        abort_unless($user->can('update', $vault), 403);
 
-        /** @var array{ node_id: int } */
+        /** @var array{node_id: int, content?: string|null} $data */
         $data = $request->validated();
 
         /** @var VaultNode $node */
         $node = $vault->nodes()->findOrFail($data['node_id']);
 
-        $applyTemplateToVaultNode->handle($template, $node);
+        $content = $applyTemplateToVaultNode->render(
+            $template,
+            $data['content'] ?? (string) $node->content,
+        );
+
+        return response()->json([
+            'data' => [
+                'content' => $content,
+            ],
+        ]);
     }
 }

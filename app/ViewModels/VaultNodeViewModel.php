@@ -28,6 +28,16 @@ final readonly class VaultNodeViewModel
 
     public static function fromModel(VaultNode $node): self
     {
+        return self::make($node, true);
+    }
+
+    public static function fromModelWithoutContent(VaultNode $node): self
+    {
+        return self::make($node, false);
+    }
+
+    private static function make(VaultNode $node, bool $includeContent): self
+    {
         $extension = $node->extension ? ".{$node->extension}" : '';
         $fullPath = "/{$node->fullPath()}{$extension}";
         $url = $node->is_file ? app(GetUrlFromVaultNode::class)->handle($node) : '';
@@ -42,7 +52,7 @@ final readonly class VaultNodeViewModel
             $node->extension,
             $fullPath,
             $url,
-            $node->content,
+            $includeContent ? $node->content : null,
             $node->updated_at,
         );
     }

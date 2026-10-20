@@ -53,6 +53,10 @@ final class HandleInertiaRequests extends Middleware
 
         return [
             ...parent::share($request),
+            'collaboration' => [
+                'enabled' => config()->boolean('yjs.enabled'),
+                'url' => config()->string('yjs.public_url'),
+            ],
             'app' => [
                 'user' => fn(): ?array => $user
                     ? [

@@ -30,11 +30,17 @@ final class ApplyTemplateToVaultNodeRequest extends FormRequest
 
         return [
             'node_id' => [
+                'required',
                 'integer',
                 Rule::exists('vault_nodes', 'id')
                     ->where('vault_id', $vault->id)
                     ->where('is_file', 1)
                     ->where('extension', 'md'),
+            ],
+            'content' => [
+                'nullable',
+                'string',
+                'max:2000000',
             ],
         ];
     }

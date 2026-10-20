@@ -52,7 +52,7 @@ final readonly class ProcessDiskVault
         foreach ($directories as $directory) {
             $attributes['name'] = pathinfo($directory, PATHINFO_BASENAME);
             $node = $createVaultNode->handle($vault, $attributes, false);
-            $this->processDirectory($disk, $vault, "/$directory", $node->id);
+            $this->processDirectory($disk, $vault, $this->absolutePath($directory), $node->id);
         }
 
         /** @var string $file */
@@ -61,8 +61,17 @@ final readonly class ProcessDiskVault
             $attributes['is_file'] = true;
             $attributes['name'] = $pathInfo['filename'];
             $attributes['extension'] = $pathInfo['extension'] ?? 'md';
-            $attributes['content'] = (string) file_get_contents("/$file");
+            $attributes['content'] = (string) file_get_contents($this->absolutePath($file));
             $createVaultNode->handle($vault, $attributes, false);
         }
+    }
+
+    private function absolutePath(string $path): string
+    {
+        if (str_starts_with($path, '/') || preg_match('/^[A-Za-z]:[\\\\\/]/', $path) === 1) {
+            return $path;
+        }
+
+        return '/' . $path;
     }
 }

@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Models\Vault;
 use App\Models\VaultCollaborator;
 use App\Notifications\VaultCollaborationInvitationReceived;
+use App\Services\YjsServiceClient;
 
 final readonly class DeleteVaultCollaboration
 {
@@ -36,6 +37,7 @@ final readonly class DeleteVaultCollaboration
 
         if ($user->pivot->accepted) {
             broadcast(new VaultCollaborationAccessRevokedEvent($vault, $user));
+            app(YjsServiceClient::class)->revokeUser($vault->id, $user->id);
         }
     }
 }

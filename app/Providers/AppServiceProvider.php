@@ -7,12 +7,15 @@ namespace App\Providers;
 use App\Models\Setting;
 use Carbon\CarbonImmutable;
 use Exception;
+use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\ServiceProvider;
 use Inertia\ExceptionResponse;
@@ -48,7 +51,18 @@ final class AppServiceProvider extends ServiceProvider
         $this->configureAssetURL();
         $this->configureSocialite();
         $this->configureInertiaExceptions();
+        $this->configureRateLimiting();
         $this->checkForUpdates();
+    }
+
+    /** Configure rate limits for collaboration endpoints. */
+    private function configureRateLimiting(): void
+    {
+        RateLimiter::for('yjs-token', fn(Request $request): Limit => Limit::perMinute(30)
+            ->by((string) (auth()->id() ?? $request->ip())));
+
+        RateLimiter::for('yjs-snapshot', fn(Request $request): Limit => Limit::perMinute(120)
+            ->by((string) (auth()->id() ?? $request->ip())));
     }
 
     /** Bind the application's settings singleton. */

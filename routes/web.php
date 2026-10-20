@@ -25,7 +25,11 @@ use App\Http\Controllers\VaultNodeChildrenController;
 use App\Http\Controllers\VaultNodeController;
 use App\Http\Controllers\VaultNodeImportController;
 use App\Http\Controllers\VaultNodeMoveController;
+use App\Http\Controllers\VaultNodeSnapshotController;
 use App\Http\Controllers\VaultSearchController;
+use App\Http\Controllers\YjsSeedClaimController;
+use App\Http\Controllers\YjsSeedCompleteController;
+use App\Http\Controllers\YjsTokenController;
 use App\Http\Middleware\EnsureEmailIsConfigured;
 use App\Http\Middleware\EnsureRegistrationIsEnabled;
 use App\Http\Middleware\EnsureUserIsAdmin;
@@ -86,6 +90,21 @@ Route::middleware('auth')->group(function (): void {
     Route::middleware([EnsureUserIsAdmin::class])->group(function (): void {
         Route::patch('settings', [SettingController::class, 'update'])->name('settings.update');
     });
+
+    Route::middleware('throttle:yjs-token')->prefix('api/yjs')->name('yjs.')->group(function (): void {
+        Route::post('token', YjsTokenController::class)->name('token');
+        Route::post('seed-claim', YjsSeedClaimController::class)->name('seed.claim');
+        Route::post('seed-complete', YjsSeedCompleteController::class)->name('seed.complete');
+    });
+
+    Route::middleware('throttle:yjs-snapshot')
+        ->prefix('api/vaults/{vault}/nodes/{node}')
+        ->scopeBindings()
+        ->name('api.vaults.nodes.')
+        ->group(function (): void {
+            Route::match(['patch', 'post'], 'snapshot', VaultNodeSnapshotController::class)
+                ->name('snapshot');
+        });
 
     Route::post('logout', [LoginController::class, 'destroy'])->name('logout');
 });

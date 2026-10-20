@@ -2,6 +2,11 @@
 
 declare(strict_types=1);
 
+use App\Actions\CreateVault;
+use App\Actions\CreateVaultNode;
+use App\Models\User;
+use App\Models\Vault;
+use App\Models\VaultNode;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
@@ -53,4 +58,18 @@ expect()->extend('toBeOne', fn() => $this->toBe(1));
 function something(): void
 {
     // ..
+}
+
+/** @return array{Vault, VaultNode} */
+function collaborativeNote(User $user, string $content = '# Note'): array
+{
+    $vault = app(CreateVault::class)->handle($user, ['name' => fake()->words(3, true)]);
+    $note = app(CreateVaultNode::class)->handle($vault, [
+        'is_file' => true,
+        'name' => 'note',
+        'extension' => 'md',
+        'content' => $content,
+    ]);
+
+    return [$vault, $note];
 }

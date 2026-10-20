@@ -25,6 +25,7 @@ final readonly class UpdateVaultNode
         VaultNode $node,
         array $attributes,
         bool $broadcastToCurrentUser = false,
+        bool $broadcastContent = true,
     ): VaultNode {
         $originalPath = app(GetPathFromVaultNode::class)->handle($node);
         $originalLinkPath = '';
@@ -64,8 +65,9 @@ final readonly class UpdateVaultNode
             $newTags = $this->getTags($node);
 
             if ($previousLinks !== $newLinks || $previousTags !== $newTags) {
-                // Broadcast events
-                broadcast(new VaultOpenedFileDataUpdatedEvent($node));
+                // Snapshot updates must not leak note content into a
+                // full-document event; only the metadata is needed.
+                broadcast(new VaultOpenedFileDataUpdatedEvent($node, $broadcastContent));
             }
 
             if ($previousTags !== $newTags) {
@@ -83,11 +85,15 @@ final readonly class UpdateVaultNode
             app(UpdateVaultNodeBacklinks::class)->handle($node, $originalLinkPath);
         }
 
-        // Broadcast events
-        $pendingBroadcast = broadcast(new VaultNodeUpdatedEvent($node));
+        // A live Yjs note must never receive a full-document broadcast. The
+        // snapshot endpoint passes broadcastContent=false and emits a
+        // metadata-only VaultNodeSnapshotUpdatedEvent instead.
+        if ($broadcastContent) {
+            $pendingBroadcast = broadcast(new VaultNodeUpdatedEvent($node));
 
-        if (!$broadcastToCurrentUser) {
-            $pendingBroadcast->toOthers();
+            if (!$broadcastToCurrentUser) {
+                $pendingBroadcast->toOthers();
+            }
         }
 
         if (

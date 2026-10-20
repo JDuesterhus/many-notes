@@ -18,6 +18,7 @@ final class VaultOpenedFileDataUpdatedEvent implements ShouldBroadcastNow
 
     public function __construct(
         private VaultNode $file,
+        private bool $includeContent = true,
     ) {
         //
     }
@@ -35,7 +36,9 @@ final class VaultOpenedFileDataUpdatedEvent implements ShouldBroadcastNow
     {
         return [
             'data' => [
-                'file' => VaultNodeViewModel::fromModel($this->file),
+                'file' => $this->includeContent
+                    ? VaultNodeViewModel::fromModel($this->file)
+                    : VaultNodeViewModel::fromModelWithoutContent($this->file),
                 ...(array) VaultOpenedFileDataViewModel::fromModel($this->file),
             ],
         ];
