@@ -326,44 +326,12 @@
         -webkit-box-decoration-break: clone;
     }
 
-    .presence-line-chip {
-        height: 1.25rem;
-        left: calc(-1.4rem - var(--presence-index, 0) * 1.3rem);
-        pointer-events: none;
-        position: absolute;
-        top: 0.15em;
-        width: 1.25rem;
-        z-index: 5;
-    }
-
-    .presence-line-chip__label {
-        align-items: center;
-        background-color: var(--presence-color, #2563eb);
-        border: 1px solid rgb(255 255 255 / 35%);
-        border-radius: 9999px;
-        color: #fff;
-        display: flex;
-        font-size: 9px;
-        font-weight: 700;
-        height: 100%;
-        justify-content: center;
-        line-height: 1;
-        width: 100%;
-    }
-
     @media (max-width: 640px) {
         .collaboration-carets__label {
             font-size: 10px;
             max-width: 7rem;
             overflow: hidden;
             text-overflow: ellipsis;
-        }
-
-        .presence-line-chip {
-            height: 1.1rem;
-            left: calc(-1.15rem - var(--presence-index, 0) * 1.05rem);
-            top: 0.1em;
-            width: 1.1rem;
         }
     }
 

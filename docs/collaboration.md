@@ -28,8 +28,7 @@ Client debounced snapshot ── Markdown ── Laravel ── vault_nodes.cont
 | Component | Responsibility |
 | --- | --- |
 | `resources/js/composables/useCollaboration.ts` | Y.Doc, provider, token refresh, seed handshake, snapshot scheduling, connection status |
-| `resources/js/composables/useEditor.ts` | TipTap + Collaboration + CollaborationCaret + line chips |
-| `resources/js/services/tiptap/extension-presence-line-chips.ts` | Per-line presence chips from awareness state |
+| `resources/js/composables/useEditor.ts` | TipTap + Collaboration + CollaborationCaret |
 | `app/Http/Controllers/YjsTokenController.php` | Short-lived JWT for one note |
 | `app/Http/Controllers/YjsSeedClaimController.php` | Atomic one-time seed lease |
 | `app/Http/Controllers/VaultNodeSnapshotController.php` | Monotonic Markdown snapshots |
@@ -177,17 +176,17 @@ awareness update, so V1 intentionally keeps the single `cursor` field.
   and dark themes.
 - The server overwrites client-supplied identity fields, so a client cannot
   impersonate another user.
-- `CollaborationCaret` renders the colored caret, name label and selection.
-- A custom ProseMirror decoration renders initials chips at the start of each
-  block containing a remote cursor. Multiple users on the same block are
-  staggered to the left and never overlap the text.
-- Chips are `aria-hidden`; the visible name label and tooltip carry the
-  information. Color is never the only identifier.
-- Disconnecting removes the awareness state, caret and chip.
+- `CollaborationCaret` renders the colored caret, the name label above the
+  caret and the selection highlight.
+- The editor status row shows compact initials avatars for every connected
+  user, with the full name as a tooltip.
+- Color is never the only identifier: the name label and avatar tooltip are
+  always available.
+- Disconnecting removes the awareness state, caret and top avatar.
 
 Awareness is never persisted. The Hocuspocus provider batches outgoing
-document/awareness messages in an 80 ms window, and the line-chip decoration
-rebuild is separately throttled to 80 ms.
+document/awareness messages in an 80 ms window, which also throttles caret and
+selection updates.
 
 ## Connection status
 
@@ -366,9 +365,8 @@ routes.
    in the same profile, so awareness is independent).
 4. Confirm the status shows `Live` in both windows.
 5. Type in one window; the text appears in the other without a reload.
-6. Move the cursor; the caret, name label and initials chip appear in the other
-   window. Put both cursors on the same line and confirm the chips do not
-   overlap the text.
+6. Move the cursor; the colored caret, its name label and the connected-user
+   avatar appear in the other window.
 7. Wait two seconds, then check `vault_nodes.content`, the Markdown file and the
    tags/backlinks panel.
 8. Reload one window; the content must remain and must not be duplicated.
@@ -421,7 +419,7 @@ not committed.
 | Revoked collaborator | status `No permission`, editor read-only, other user unchanged |
 | Both clients offline, both edit, reconnect | both edits merged, one seed only |
 | Two users edit different paragraphs | both markers present in both editors |
-| Disconnect removes presence | line chip and caret disappeared for the remaining user |
+| Disconnect removes presence | caret and top avatar disappeared for the remaining user |
 | Large note (300 real blocks) | opened in ~1.5 s; edits synced |
 | Live link rewrite on rename | open editor link changed to the renamed path; snapshot kept it |
 | Live Typesense search after snapshot | unique phrase found the note |
@@ -429,7 +427,7 @@ not committed.
 | NAS deployment (Docker Compose) | app + Yjs + Nginx proxy healthy at port 8070 |
 
 Playwright checks covered: live typing in both directions, caret name labels,
-same-line chips without overlap, database and file snapshots, reload,
+connected-user avatars, database and file snapshots, reload,
 offline-edit/reconnect merge, disabled raw-Markdown toggle, revoke, provider
 cleanup, service restart and token expiry.
 

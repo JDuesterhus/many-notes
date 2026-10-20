@@ -7,7 +7,6 @@ import { CustomTableColumnAlign } from '@/services/tiptap/extension-custom-table
 import { CustomTableHeader } from '@/services/tiptap/extension-custom-table-header';
 import { CustomTaskItem } from '@/services/tiptap/extension-custom-task-item';
 import { Hashtag } from '@/services/tiptap/extension-hashtag';
-import { PresenceLineChips } from '@/services/tiptap/extension-presence-line-chips';
 import { SmartBracket } from '@/services/tiptap/extension-smart-bracket';
 import { VaultFileDrop } from '@/services/tiptap/extension-vault-file-drop';
 import {
@@ -149,10 +148,6 @@ export function useEditor(options: SetupEditorOptions) {
                                   'data-user': user.name,
                               }),
                           }),
-                          PresenceLineChips.configure({
-                              awareness: collaboration.provider.awareness,
-                              localClientId: collaboration.provider.awareness?.clientID ?? null,
-                          }),
                       ]
                     : []),
             ],
@@ -160,7 +155,7 @@ export function useEditor(options: SetupEditorOptions) {
             editable: options.isEditMode.value,
             editorProps: {
                 attributes: {
-                    class: 'h-full !max-w-none flow-root focus:outline-none prose dark:prose-invert',
+                    class: 'h-full !max-w-none flow-root focus:outline-none prose dark:prose-invert pt-6',
                 },
             },
             onCreate() {

@@ -31,7 +31,7 @@ Vaults are simply storage containers for your files, and Many Notes lets you cho
 - **Multiple vaults per user**: Choose how to organize your files
 - **OpenID Connect and OAuth**: Authenticate with most login providers
 - **Collaboration**: Invite other users to access your vaults
-- **Live co-editing**: Edit the same note together in real time with Yjs and Hocuspocus, including remote carets, selections and per-line presence chips
+- **Live co-editing**: Edit the same note together in real time with Yjs and Hocuspocus, including remote carets, selections, name labels and connected-user avatars
 - **Broadcasting**: Real-time, live-updating user interfaces
 - **File search**: Experience a fast and typo-tolerant search
 - **Tree view explorer**: Fast navigation with relevant actions in the context menu
