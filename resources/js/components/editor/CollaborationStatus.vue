@@ -26,7 +26,7 @@ const label = computed(() => {
         case 'no-permission':
             return 'No permission';
         case 'token-expired':
-            return 'Session expired';
+            return 'Token expired';
         case 'error':
             return 'Collaboration unavailable';
         case 'disabled':
@@ -66,6 +66,13 @@ const detail = computed(() => props.tokenError ?? props.snapshotError ?? '');
         <span class="flex items-center gap-1.5" :class="tone">
             <span class="h-1.5 w-1.5 rounded-full bg-current"></span>
             <span>{{ label }}</span>
+        </span>
+        <span
+            v-if="snapshotError"
+            class="text-error-600 dark:text-error-500"
+            :title="snapshotError"
+        >
+            Snapshot delayed
         </span>
         <span
             v-for="participant in participants"

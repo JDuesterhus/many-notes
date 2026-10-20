@@ -91,6 +91,11 @@ const { editor, setContent, replaceContent, onMarkdownChanged, readMarkdown } = 
     isEditMode: effectiveEditMode,
     collaboration: collaboration.editorOptions.value,
     onEditorReady: attachEditor,
+    onBlur: () => {
+        if (isLive.value) {
+            void collaboration.flush();
+        }
+    },
     onUpdate: (markdown: string) => {
         if (isLive.value) {
             onContentChange(markdown);

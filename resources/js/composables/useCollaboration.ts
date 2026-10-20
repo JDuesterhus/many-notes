@@ -575,7 +575,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             name: room,
             document: ydoc,
             token: async () => (await requestToken()).token,
-            flushDelay: false,
+            flushDelay: 80,
             onStatus: ({ status: websocketStatus }) => {
                 if (!canEdit.value) {
                     return;
@@ -617,6 +617,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         window.addEventListener('blur', onWindowBlur);
         document.addEventListener('visibilitychange', onVisibilityChange);
         window.addEventListener('pagehide', flushOnPageHide);
+        window.addEventListener('beforeunload', flushOnPageHide);
     }
 
     const editorOptions = computed(() =>
@@ -651,6 +652,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         window.removeEventListener('blur', onWindowBlur);
         document.removeEventListener('visibilitychange', onVisibilityChange);
         window.removeEventListener('pagehide', flushOnPageHide);
+        window.removeEventListener('beforeunload', flushOnPageHide);
 
         // Send a final snapshot before tearing down. The fetch is already in
         // flight when the provider and editor disappear; no late update from

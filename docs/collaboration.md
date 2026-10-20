@@ -159,6 +159,11 @@ Awareness carries:
 }
 ```
 
+`cursor.anchor` and `cursor.head` are Yjs relative positions. They encode both
+the caret (`anchor === head`) and the selected range (`anchor !== head`); a
+separate `selection` field would duplicate the same positions in every
+awareness update, so V1 intentionally keeps the single `cursor` field.
+
 - Colors are deterministic from the user id and use a palette readable in light
   and dark themes.
 - The server overwrites client-supplied identity fields, so a client cannot
@@ -171,7 +176,9 @@ Awareness carries:
   information. Color is never the only identifier.
 - Disconnecting removes the awareness state, caret and chip.
 
-Awareness is never persisted and awareness updates are throttled to 80 ms.
+Awareness is never persisted. The Hocuspocus provider batches outgoing
+document/awareness messages in an 80 ms window, and the line-chip decoration
+rebuild is separately throttled to 80 ms.
 
 ## Connection status
 
@@ -255,6 +262,10 @@ SQLite database, mounted read-only. **SQLite is the supported database for the
 direct authorization check in V1.** If you run MySQL/PostgreSQL, adapt
 `yjs-server/src/storage.ts` to the same schema and set the connection
 environment accordingly; see the limitations below.
+
+Because the membership check is a read-only database query, V1 does not use a
+`LARAVEL_INTERNAL_URL` callback. The service only needs the shared Yjs JWT secret
+and the internal service token; it never needs the Laravel session or APP_KEY.
 
 ### Reverse proxy
 
@@ -373,14 +384,15 @@ npm test
 
 ## Verification performed for this fork
 
-Environment: Windows, PHP 8.4.26, Node 22.23.3, SQLite, Chromium via
-Playwright 1.62.1. PHP, Node and Playwright were installed into a temporary
-tool directory for the run; they are not committed.
+Environment: Windows for the build/test host, PHP 8.4.26, Node 22.23.3, SQLite,
+Chromium via Playwright 1.62.1, plus the OMV NAS Docker host. PHP, Node and
+Playwright were installed into a temporary tool directory for the run; they are
+not committed.
 
 | Check | Result |
 | --- | --- |
 | `composer analyse` (Rector, Pint, PHPCS, PHPStan level 10, type coverage) | passed; type coverage 100 % |
-| `composer test` (Pest, parallel) | 210 passed, 551 assertions |
+| `composer test` (Pest, parallel) | 211 passed, 552 assertions |
 | `npm run lint` / `npm run format` / `npm run typecheck` / `npm run build` | passed |
 | `yjs-server`: `npm run typecheck` | passed |
 | `yjs-server`: `npm test` | 19 passed |
@@ -392,25 +404,34 @@ tool directory for the run; they are not committed.
 | Short token TTL | controlled reconnect, editor remained usable |
 | Mobile viewport 390×844 | no horizontal overflow |
 | Revoked collaborator | status `No permission`, editor read-only, other user unchanged |
+| Both clients offline, both edit, reconnect | both edits merged, one seed only |
+| Two users edit different paragraphs | both markers present in both editors |
+| Large note (300 real blocks) | opened in ~1.5 s; edits synced |
+| Live Typesense search after snapshot | unique phrase found the note |
+| Vault ZIP export after snapshot | exported Markdown contained the phrase |
+| NAS deployment (Docker Compose) | app + Yjs + Nginx proxy healthy at port 8070 |
 
 Playwright checks covered: live typing in both directions, caret name labels,
 same-line chips without overlap, database and file snapshots, reload,
 offline-edit/reconnect merge, disabled raw-Markdown toggle, revoke, provider
 cleanup, service restart and token expiry.
 
-### Not executed locally
+### NAS deployment verification
 
-- **Docker Compose runtime**: Docker Desktop/WSL is not installed in the
-  verification environment, so `docker compose up` could not run. The standalone
-  Compose v5.6.0 CLI was used for `docker compose -f compose.yaml config
-  --quiet`, which passed with the required secrets and `MANY_NOTES_IMAGE` set.
-  The next command on a machine with a Docker daemon is `docker compose up -d
-  --build`. The service itself was exercised directly with Node and the app with
-  the same proxy routing (`/yjs` stripped, WebSocket upgrade).
-- **Typesense**: no Typesense server was available locally. The snapshot path
-  updates `vault_nodes.content` and the model's `toSearchableArray()` payload,
-  which is the input used by Scout/Typesense. A live Typesense query should be
-  part of the deployment smoke test.
+The fork was deployed to the OMV NAS with Docker Compose:
+
+- `many-notes:fork` (app), `many-notes-yjs:fork` (Hocuspocus) and an Nginx proxy.
+- `docker compose up -d --build` completed; all three services are healthy.
+- App `/up` returned `200`; `/yjs/health` returned `{"status":"ok"}`.
+- Reverb WebSocket upgrades, Typesense health and the live Typesense search
+  query were verified on the NAS.
+- Production data was preserved: the existing `.env` was byte-identical, the
+  SQLite integrity check returned `ok`, and users/vaults/nodes were unchanged.
+- A test vault was used for the two-user, offline, large-note, search, export and
+  revoke scenarios, then removed together with its Yjs document.
+
+Remaining deployment caveat:
+
 - **MySQL/PostgreSQL authorization query**: only SQLite was exercised. The
   Hocuspocus authorization check is written against the SQLite schema; see the
   limitation above.

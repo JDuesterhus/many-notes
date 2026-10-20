@@ -33,6 +33,7 @@ interface SetupEditorOptions {
     content: string;
     isEditMode: Readonly<Ref<boolean>>;
     onUpdate: (markdown: string) => void;
+    onBlur?: () => void;
     openFilePath: (path: string) => void;
     uploadFiles: (request: VaultFileUploadRequest) => void;
     collaboration?: EditorCollaboration | null;
@@ -52,6 +53,8 @@ function renderCollaborationCaret(user: PresenceUser): HTMLElement {
     label.className = 'collaboration-carets__label';
     label.style.backgroundColor = user.color;
     label.textContent = user.name;
+    label.title = user.name;
+    label.setAttribute('aria-label', user.name);
 
     caret.appendChild(label);
 
@@ -172,6 +175,9 @@ export function useEditor(options: SetupEditorOptions) {
                 if (instance && collaboration) {
                     options.onEditorReady?.(instance, setContent, readMarkdown);
                 }
+            },
+            onBlur() {
+                options.onBlur?.();
             },
             onUpdate() {
                 if (isSyncing) {

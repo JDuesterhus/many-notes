@@ -15,6 +15,10 @@ final readonly class DeleteVaultNode
     /** @return array<int> */
     public function handle(VaultNode $node, bool $deleteFromDisk = true): array
     {
+        // Nodes loaded from the database (and route-bound nodes) do not carry
+        // the inverse vault relation; template detection and path handling need it.
+        $node->loadMissing('vault');
+
         $wasInTemplatesFolder = $node->isInTemplatesFolder();
         $deletedNodeIds = DB::transaction(fn(): array => $this->deleteFromDatabase($node));
 
