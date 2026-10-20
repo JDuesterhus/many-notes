@@ -361,8 +361,8 @@
 
         .presence-line-chip {
             height: 1.1rem;
-            left: -1.15rem;
-            top: calc(0.1em + var(--presence-index, 0) * 1.15rem);
+            left: calc(-1.15rem - var(--presence-index, 0) * 1.05rem);
+            top: 0.1em;
             width: 1.1rem;
         }
     }
