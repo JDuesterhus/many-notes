@@ -202,6 +202,21 @@ it('stores a snapshot and rejects a stale one', function (): void {
     expect($note->refresh()->content)->toBe('# New');
 });
 
+it('accepts an empty snapshot when a note is cleared', function (): void {
+    $user = User::factory()->create();
+    [$vault, $note] = collaborativeNote($user, 'Old');
+
+    $this->actingAs($user)
+        ->patchJson(
+            route('api.vaults.nodes.snapshot', ['vault' => $vault->id, 'node' => $note->id]),
+            ['content' => '', 'base_seq' => 0],
+        )
+        ->assertOk()
+        ->assertJsonPath('data.snapshot_seq', 1);
+
+    expect($note->refresh()->content)->toBe('');
+});
+
 it('does not broadcast snapshot content', function (): void {
     Event::fake([VaultNodeUpdatedEvent::class, VaultNodeSnapshotUpdatedEvent::class]);
 

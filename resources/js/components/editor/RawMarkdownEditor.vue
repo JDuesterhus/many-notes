@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
 import { EditorState } from '@codemirror/state';
@@ -25,13 +25,13 @@ const emit = defineEmits<{
     focus: [];
     blur: [];
     activity: [];
-    change: [];
 }>();
 
 const host = ref<HTMLElement | null>(null);
 
 let view: EditorView | null = null;
 let undoManager: Y.UndoManager | null = null;
+let readyForUserInput = false;
 
 const editorTheme = EditorView.theme({
     '&': {
@@ -116,6 +116,7 @@ function cursorAwareness(real: Awareness): Awareness {
 }
 
 function destroyEditor(): void {
+    readyForUserInput = false;
     view?.destroy();
     view = null;
     undoManager?.destroy();
@@ -148,6 +149,10 @@ function createEditor(): void {
                     spellcheck: props.spellcheck ? 'true' : 'false',
                 }),
                 EditorView.updateListener.of(update => {
+                    if (!readyForUserInput) {
+                        return;
+                    }
+
                     const remoteSync = update.transactions.some(
                         transaction => transaction.annotation(ySyncAnnotation) !== undefined
                     );
@@ -156,9 +161,17 @@ function createEditor(): void {
                         emit('activity');
                     }
 
-                    if (update.docChanged && !remoteSync) {
+                    const userChange = update.transactions.some(
+                        transaction =>
+                            transaction.isUserEvent('input') ||
+                            transaction.isUserEvent('delete') ||
+                            transaction.isUserEvent('paste') ||
+                            transaction.isUserEvent('undo') ||
+                            transaction.isUserEvent('redo')
+                    );
+
+                    if (update.docChanged && !remoteSync && userChange) {
                         emit('activity');
-                        emit('change');
                     }
                 }),
                 EditorView.domEventHandlers({
@@ -171,6 +184,11 @@ function createEditor(): void {
     });
 
     view.focus();
+    // yCollab performs an initial document sync after mount. That is not a
+    // user edit; mark the editor ready only after the initial render settles.
+    setTimeout(() => {
+        readyForUserInput = true;
+    }, 100);
 }
 
 onMounted(createEditor);

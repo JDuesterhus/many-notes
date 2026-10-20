@@ -1,4 +1,4 @@
-import VaultNodeSnapshotController from '@/actions/App/Http/Controllers/VaultNodeSnapshotController';
+﻿import VaultNodeSnapshotController from '@/actions/App/Http/Controllers/VaultNodeSnapshotController';
 import YjsSeedClaimController from '@/actions/App/Http/Controllers/YjsSeedClaimController';
 import YjsSeedCompleteController from '@/actions/App/Http/Controllers/YjsSeedCompleteController';
 import YjsTokenController from '@/actions/App/Http/Controllers/YjsTokenController';
@@ -97,10 +97,11 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     let lastMarkdown = options.markdown;
     let lastSentMarkdown = options.markdown;
     let lastRichMarkdown: string | null = null;
+    let lastProjectedMarkdown: string | null = null;
+    let lastRichCursor: unknown = null;
     let lastProjectionOwner: number | null = null;
     let lastHadRichEditor = false;
     let editingActive = false;
-    let rawDirty = false;
     let editingTimer: ReturnType<typeof setTimeout> | null = null;
     let richProjectionTimer: ReturnType<typeof setTimeout> | null = null;
     let snapshotTimer: ReturnType<typeof setTimeout> | null = null;
@@ -148,6 +149,12 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         }
 
         const ownClientId = awareness.clientID;
+        const localState = awareness.getLocalState() as { cursor?: unknown } | null;
+
+        if (localState?.cursor) {
+            lastRichCursor = localState.cursor;
+        }
+
         const users: PresenceUser[] = [];
         const editors: EditingState[] = [];
 
@@ -208,15 +215,28 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
             lastProjectionOwner = rawOwner;
 
-            if (rawOwner === ownClientId && options.isMarkdownMode.value && !richActive) {
+            if (
+                rawOwner === ownClientId &&
+                options.isMarkdownMode.value &&
+                !richActive &&
+                ytext &&
+                ytext.toString() !== lastProjectedMarkdown
+            ) {
                 scheduleRichProjection();
             }
         }
 
         // Rich editing has priority and keeps its carets. As soon as no rich
-        // editor is active, one elected client projects the accumulated raw
-        // changes into the fragment.
-        if (wasRichActive && !richActive && isProjectionOwner()) {
+        // editor is active, one elected client projects accumulated raw
+        // changes into the fragment. Comparing content prevents a projection
+        // (and a caret reset) when a user merely switches to raw mode.
+        if (
+            wasRichActive &&
+            !richActive &&
+            isProjectionOwner() &&
+            ytext &&
+            ytext.toString() !== lastProjectedMarkdown
+        ) {
             scheduleRichProjection();
         }
     }
@@ -232,13 +252,13 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
         // Final raw flush on blur/idle, even if a rich user is still typing.
         // This keeps the fragment current when the raw user leaves.
-        if (options.isMarkdownMode.value && rawDirty && ytext && isProjectionOwner()) {
+        if (options.isMarkdownMode.value && ytext && isProjectionOwner()) {
             if (richProjectionTimer) {
                 clearTimeout(richProjectionTimer);
                 richProjectionTimer = null;
             }
 
-            if (ytext.toString() !== lastRichMarkdown) {
+            if (ytext.toString() !== lastProjectedMarkdown) {
                 void applyMarkdownToRich(ytext.toString());
             }
         }
@@ -382,7 +402,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         lastRichMarkdown = markdown;
 
         await setEditorContent(markdown);
-        rawDirty = false;
+        lastProjectedMarkdown = markdown;
     }
 
     function isProjectionOwner(): boolean {
@@ -444,7 +464,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         richProjectionTimer = setTimeout(() => {
             richProjectionTimer = null;
 
-            if (ytext && !hasActiveRichEditor()) {
+            if (ytext && !hasActiveRichEditor() && ytext.toString() !== lastProjectedMarkdown) {
                 void applyMarkdownToRich(ytext.toString());
             }
         }, 120);
@@ -471,6 +491,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
         const current = currentMarkdown();
         lastMarkdown = current;
+        lastProjectedMarkdown = current;
 
         if (current !== lastSentMarkdown) {
             scheduleSnapshot();
@@ -502,19 +523,19 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             return;
         }
 
-        const richLength = ydoc.getXmlFragment('default').length;
-        const textLength = ytext.length;
+        const text = ytext.toString();
+        const richMarkdown = getEditorMarkdown?.() ?? '';
 
-        if (textLength > 0 && richLength === 0) {
-            await applyMarkdownToRich(ytext.toString());
+        if (text.length > 0 && richMarkdown.trim() === '') {
+            await applyMarkdownToRich(text);
 
             return;
         }
 
-        if (richLength > 0 && textLength === 0) {
-            const markdown = getEditorMarkdown?.() ?? options.markdown;
-            lastRichMarkdown = markdown;
-            replaceYText(ytext, markdown, SEED_ORIGIN);
+        if (richMarkdown.length > 0 && text.length === 0) {
+            lastRichMarkdown = richMarkdown;
+            lastProjectedMarkdown = richMarkdown;
+            replaceYText(ytext, richMarkdown, SEED_ORIGIN);
         }
     }
 
@@ -626,6 +647,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         }
 
         if (tokenData?.yjs_state_exists === true) {
+            await ensureMirrors();
             markSeeded();
             finishReady();
 
@@ -637,6 +659,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             (tokenData?.yjs_state_exists === null && tokenData?.seeded !== true);
 
         if (!shouldSeed) {
+            await ensureMirrors();
             markSeeded();
             finishReady();
 
@@ -746,6 +769,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
     function updateRichBase(markdown: string): void {
         lastRichMarkdown = markdown;
+        lastProjectedMarkdown = ytext?.toString() ?? markdown;
     }
 
     function onContentChange(markdown: string): void {
@@ -757,6 +781,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         const merged = mergeMarkdown(lastRichMarkdown ?? current, markdown, current);
 
         lastRichMarkdown = markdown;
+        lastProjectedMarkdown = markdown;
 
         if (ytext) {
             replaceYText(ytext, merged, RICH_ORIGIN);
@@ -778,10 +803,6 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         setAwarenessField('rawCursor', null);
     }
 
-    function markRawEdit(): void {
-        rawDirty = true;
-    }
-
     function attachEditor(
         instance: Editor,
         setContent: (markdown: string) => Promise<void>,
@@ -796,7 +817,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         }
 
         if (synced && isReady.value) {
-            finishReady();
+            void ensureMirrors().then(() => finishReady());
         }
     }
 
@@ -947,6 +968,28 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             onAwarenessChange: updateParticipants,
         });
 
+        const awareness = provider.value.awareness;
+
+        if (awareness) {
+            const setLocalStateField = awareness.setLocalStateField.bind(awareness);
+
+            // yCursorPlugin clears the local cursor on focusout. Presence should
+            // keep the last rich position instead of blinking out when another
+            // user or window gets focus.
+            awareness.setLocalStateField = (field: string, value: unknown): void => {
+                if (
+                    field === 'cursor' &&
+                    value === null &&
+                    !options.isMarkdownMode.value &&
+                    lastRichCursor !== null
+                ) {
+                    return;
+                }
+
+                setLocalStateField(field, value);
+            };
+        }
+
         provider.value.setAwarenessField('user', localUser);
         provider.value.setAwarenessField('mode', options.isMarkdownMode.value ? 'raw' : 'rich');
         provider.value.setAwarenessField('editing', false);
@@ -967,19 +1010,20 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         if (markdownMode) {
             // The TipTap caret is meaningless in raw mode; clear it so rich
             // viewers do not show a frozen caret for this user.
+            lastRichCursor = null;
             setAwarenessField('cursor', null);
         }
 
         // Leaving raw mode must not show a stale rich pane. Flush accumulated
         // raw Markdown even if another rich editor is currently typing; the
         // merge already includes the rich side's latest mirror.
-        if (!markdownMode && rawDirty && ytext && isProjectionOwner()) {
+        if (!markdownMode && ytext && isProjectionOwner()) {
             if (richProjectionTimer) {
                 clearTimeout(richProjectionTimer);
                 richProjectionTimer = null;
             }
 
-            if (ytext.toString() !== lastRichMarkdown) {
+            if (ytext.toString() !== lastProjectedMarkdown) {
                 void applyMarkdownToRich(ytext.toString());
             }
         }
@@ -1064,7 +1108,6 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         attachEditor,
         onContentChange,
         updateRichBase,
-        markRawEdit,
         clearRawCursor,
         getMarkdown,
         beginEditing,

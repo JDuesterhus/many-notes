@@ -1,4 +1,4 @@
-import { markdownToHTML, prepareTiptapHTML } from '@/services/markdown';
+﻿import { markdownToHTML, prepareTiptapHTML } from '@/services/markdown';
 import { CustomCodeBlockLowlight } from '@/services/tiptap/extension-custom-code-block-low-light';
 import { CustomImage } from '@/services/tiptap/extension-custom-image';
 import { CustomLink } from '@/services/tiptap/extension-custom-link';
@@ -21,7 +21,13 @@ import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import { Table, TableRow } from '@tiptap/extension-table';
 import TaskList from '@tiptap/extension-task-list';
 import StarterKit from '@tiptap/starter-kit';
-import { prosemirrorToYXmlFragment, ySyncPluginKey } from '@tiptap/y-tiptap';
+import {
+    absolutePositionToRelativePosition,
+    isStructuralTransaction,
+    prosemirrorToYXmlFragment,
+    updateYFragment,
+    ySyncPluginKey,
+} from '@tiptap/y-tiptap';
 import { common, createLowlight } from 'lowlight';
 import { onMounted, onUnmounted, Ref, shallowRef, watch } from 'vue';
 
@@ -69,6 +75,7 @@ export function useEditor(options: SetupEditorOptions) {
     const collaboration = options.collaboration ?? null;
     let isSyncing: boolean = true;
     let isRemoteTransaction: boolean = false;
+    let isRemoteStructural: boolean = false;
 
     const content = !collaboration && options.content ? markdownToHTML(options.content) : '';
 
@@ -187,6 +194,8 @@ export function useEditor(options: SetupEditorOptions) {
                     { isChangeOrigin?: boolean } | undefined;
 
                 isRemoteTransaction = meta?.isChangeOrigin === true;
+                isRemoteStructural =
+                    isRemoteTransaction && isStructuralTransaction(transaction, transaction.before);
             },
             onUpdate() {
                 if (isSyncing) {
@@ -203,8 +212,50 @@ export function useEditor(options: SetupEditorOptions) {
                 const isLocal = !isRemoteTransaction;
                 isRemoteTransaction = false;
 
+                if (isLocal) {
+                    isRemoteStructural = false;
+                }
+
                 if (!isLocal) {
                     options.onRemoteUpdate?.(markdown);
+
+                    if (isRemoteStructural) {
+                        // A full raw projection can invalidate the Yjs node
+                        // mapping for a moment, hiding remote carets. Rebuild
+                        // it immediately so presence does not blink.
+                        queueMicrotask(() => {
+                            const instance = editor.value;
+                            const state = instance ? ySyncPluginKey.getState(instance.state) : null;
+
+                            if (!instance || !state?.binding) {
+                                return;
+                            }
+
+                            state.binding._forceRerender();
+
+                            // Re-anchor this user's cursor to the rebuilt
+                            // mapping so other rich users keep the caret.
+                            const anchor = absolutePositionToRelativePosition(
+                                instance.state.selection.anchor,
+                                state.type,
+                                state.binding.mapping
+                            );
+                            const head = absolutePositionToRelativePosition(
+                                instance.state.selection.head,
+                                state.type,
+                                state.binding.mapping
+                            );
+
+                            if (anchor && head) {
+                                collaboration?.provider.awareness?.setLocalStateField('cursor', {
+                                    anchor,
+                                    head,
+                                });
+                            }
+                        });
+                    }
+
+                    isRemoteStructural = false;
 
                     return;
                 }
@@ -256,9 +307,21 @@ export function useEditor(options: SetupEditorOptions) {
 
         try {
             const doc = createDocument(markdownToHTML(markdown), instance.schema);
+            const fragment = collaboration.document.getXmlFragment('default');
+            const binding = ySyncPluginKey.getState(instance.state)?.binding;
 
             collaboration.document.transact(() => {
-                prosemirrorToYXmlFragment(doc, collaboration.document.getXmlFragment('default'));
+                if (binding) {
+                    // Reconcile against the existing Yjs node mapping instead
+                    // of replacing every node. Remote rich selections and
+                    // carets survive a raw projection this way.
+                    updateYFragment(collaboration.document, fragment, doc, {
+                        mapping: binding.mapping,
+                        isOMark: binding.isOMark,
+                    });
+                } else {
+                    prosemirrorToYXmlFragment(doc, fragment);
+                }
             }, 'many-notes:rich-projection');
         } finally {
             isSyncing = false;

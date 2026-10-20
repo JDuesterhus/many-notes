@@ -75,7 +75,6 @@ const {
     attachEditor,
     onContentChange,
     updateRichBase,
-    markRawEdit,
     getMarkdown,
     beginEditing,
     noteEditingActivity,
@@ -256,7 +255,6 @@ onUnmounted(() => {
             @focus="handleRawFocus"
             @blur="handleRawBlur"
             @activity="noteEditingActivity"
-            @change="markRawEdit"
         />
 
         <div

@@ -126,6 +126,7 @@ Yjs is live, but the rest of the application needs Markdown. The client:
   same persistence path;
 - sends `PATCH /api/vaults/{vault}/nodes/{node}/snapshot` with
   `{ content, base_seq }`;
+- treats an empty `content` as a valid snapshot so clearing a note persists;
 - flushes immediately on blur, `visibilitychange` (via `sendBeacon`) and the
   final unmount;
 - never snapshots on awareness-only changes;
@@ -470,7 +471,7 @@ not committed.
 | Check | Result |
 | --- | --- |
 | `composer analyse` (Rector, Pint, PHPCS, PHPStan level 10, type coverage) | passed; type coverage 100 % |
-| `composer test` (Pest, parallel) | 213 passed, 555 assertions |
+| `composer test` (Pest, parallel) | 214 passed, 558 assertions |
 | `npm test` (Vitest, Markdown diff/merge) | 10 passed |
 | `npm run lint` / `npm run format` / `npm run typecheck` / `npm run build` | passed |
 | `yjs-server`: `npm run typecheck` | passed |
@@ -489,6 +490,11 @@ not committed.
 | Rich/raw coexistence | rich users stayed editable, carets survived a raw editor joining, raw edits appeared after rich typing paused |
 | Raw remote carets | two raw editors saw each other's caret, label and selection |
 | Raw editor newlines | Enter created a new CodeMirror line and the snapshot kept the line break |
+| Empty note clearing | raw and rich panes cleared; the empty snapshot persisted and the file became empty |
+| Same-line rich/raw edits | both concurrent markers survived in the raw and rich panes |
+| Raw navigation and reload | raw mode and the latest marker survived note switching and reload |
+| Raw undo/redo | local raw undo/redo updated the rich pane |
+| Revoked raw collaborator | status `No permission`; the CodeMirror pane became read-only |
 | Raw Markdown snapshot | `vault_nodes.content` and the Markdown file contained the raw edit |
 | Disconnect removes presence | caret and top avatar disappeared for the remaining user |
 | Large note (300 real blocks) | opened in ~1.5 s; edits synced |
