@@ -379,10 +379,10 @@ tool directory for the run; they are not committed.
 | Check | Result |
 | --- | --- |
 | `composer analyse` (Rector, Pint, PHPCS, PHPStan level 10, type coverage) | passed; type coverage 100 % |
-| `composer test` (Pest, parallel) | 207 passed, 547 assertions |
+| `composer test` (Pest, parallel) | 210 passed, 551 assertions |
 | `npm run lint` / `npm run format` / `npm run typecheck` / `npm run build` | passed |
 | `yjs-server`: `npm run typecheck` | passed |
-| `yjs-server`: `npm test` | 18 passed |
+| `yjs-server`: `npm test` | 19 passed |
 | Two/three-user Playwright E2E | 15/15 checks passed |
 | Five-user concurrent editing | all five markers converged; one seed only |
 | Large note (300 blocks) | opened in ~3.2 s; edits synced |
