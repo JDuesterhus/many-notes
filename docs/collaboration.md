@@ -399,10 +399,11 @@ cleanup, service restart and token expiry.
 
 ### Not executed locally
 
-- **Docker Compose**: Docker Desktop/WSL is not installed in the verification
-  environment. `compose.yaml` was parsed as YAML and its service graph was
-  inspected, but `docker compose config`/`up` could not run. The next command on
-  a machine with Docker is `docker compose config && docker compose up -d
+- **Docker Compose runtime**: Docker Desktop/WSL is not installed in the
+  verification environment, so `docker compose up` could not run. The standalone
+  Compose v5.6.0 CLI was used for `docker compose -f compose.yaml config
+  --quiet`, which passed with the required secrets and `MANY_NOTES_IMAGE` set.
+  The next command on a machine with a Docker daemon is `docker compose up -d
   --build`. The service itself was exercised directly with Node and the app with
   the same proxy routing (`/yjs` stripped, WebSocket upgrade).
 - **Typesense**: no Typesense server was available locally. The snapshot path
