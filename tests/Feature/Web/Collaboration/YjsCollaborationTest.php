@@ -158,6 +158,20 @@ it('claims a seed only once', function (): void {
         ->assertJsonPath('claimed', false);
 });
 
+it('rejects legacy full-document content writes for a live note', function (): void {
+    $user = User::factory()->create();
+    [$vault, $note] = collaborativeNote($user, 'Yjs content');
+
+    $this->actingAs($user)
+        ->patchJson(
+            route('vaults.nodes.update', ['vault' => $vault->id, 'node' => $note->id]),
+            ['content' => 'Legacy overwrite'],
+        )
+        ->assertStatus(409);
+
+    expect($note->refresh()->content)->toBe('Yjs content');
+});
+
 it('stores a snapshot and rejects a stale one', function (): void {
     $user = User::factory()->create();
     [$vault, $note] = collaborativeNote($user, 'Old');

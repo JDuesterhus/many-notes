@@ -56,6 +56,17 @@ final readonly class VaultNodeController
         /** @var array{name?: string, content?: string} $data */
         $data = $request->validated();
 
+        // A live Markdown note has exactly one source of truth. Legacy
+        // full-document content writes would bypass Yjs and create divergence.
+        if (
+            array_key_exists('content', $data)
+            && $node->is_file
+            && $node->extension === 'md'
+            && config()->boolean('yjs.enabled')
+        ) {
+            abort(409, 'Live notes must be saved through the snapshot endpoint.');
+        }
+
         $node = $updateVaultNode->handle($node, $data);
 
         return response()->json([

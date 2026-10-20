@@ -392,7 +392,7 @@ not committed.
 | Check | Result |
 | --- | --- |
 | `composer analyse` (Rector, Pint, PHPCS, PHPStan level 10, type coverage) | passed; type coverage 100 % |
-| `composer test` (Pest, parallel) | 211 passed, 552 assertions |
+| `composer test` (Pest, parallel) | 212 passed, 554 assertions |
 | `npm run lint` / `npm run format` / `npm run typecheck` / `npm run build` | passed |
 | `yjs-server`: `npm run typecheck` | passed |
 | `yjs-server`: `npm test` | 19 passed |
@@ -406,6 +406,7 @@ not committed.
 | Revoked collaborator | status `No permission`, editor read-only, other user unchanged |
 | Both clients offline, both edit, reconnect | both edits merged, one seed only |
 | Two users edit different paragraphs | both markers present in both editors |
+| Disconnect removes presence | line chip and caret disappeared for the remaining user |
 | Large note (300 real blocks) | opened in ~1.5 s; edits synced |
 | Live Typesense search after snapshot | unique phrase found the note |
 | Vault ZIP export after snapshot | exported Markdown contained the phrase |
