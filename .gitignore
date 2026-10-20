@@ -12,6 +12,7 @@
 /yjs-server/node_modules
 /yjs-server/dist
 /yjs-server/coverage
+/yjs-server/data
 /yjs-server/.env
 .env
 .env.backup
