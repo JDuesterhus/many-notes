@@ -486,7 +486,7 @@ not committed.
 | --- | --- |
 | `composer analyse` (Rector, Pint, PHPCS, PHPStan level 10, type coverage) | passed; type coverage 100 % |
 | `composer test` (Pest, parallel) | 214 passed, 558 assertions |
-| `npm test` (Vitest, Markdown diff/merge/seed detection) | 17 passed |
+| `npm test` (Vitest, Markdown diff/merge/seed/cursor mapping) | 18 passed |
 | `npm run lint` / `npm run format` / `npm run typecheck` / `npm run build` | passed |
 | `yjs-server`: `npm run typecheck` | passed |
 | `yjs-server`: `npm test` | 19 passed |
