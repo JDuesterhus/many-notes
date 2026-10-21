@@ -153,6 +153,33 @@ function stripMarkdownSyntax(markdown: string): { text: string; map: number[] } 
     return { text, map };
 }
 
+export function visibleOffsetForMarkdownOffset(markdown: string, offset: number): number {
+    const { map } = stripMarkdownSyntax(markdown);
+
+    if (map.length === 0 || offset <= 0) {
+        return 0;
+    }
+
+    if (offset >= markdown.length) {
+        return map.length;
+    }
+
+    let low = 0;
+    let high = map.length;
+
+    while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+
+        if ((map[middle] ?? 0) < offset) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+
+    return low;
+}
+
 function markdownOffsetAt(text: string, map: number[], offset: number, markdown: string): number {
     if (text.length === 0 || map.length === 0) {
         return 0;

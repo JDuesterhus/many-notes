@@ -8,6 +8,7 @@ import {
     mapTextOffset,
     mergeMarkdown,
     replaceYText,
+    visibleOffsetForMarkdownOffset,
 } from './collaborationMarkdown';
 
 describe('diffText', () => {
@@ -91,6 +92,20 @@ describe('findMarkdownOffsetForVisibleText', () => {
 
     it('returns zero for an empty prefix', () => {
         expect(findMarkdownOffsetForVisibleText('# Title', '')).toBe(0);
+    });
+});
+
+describe('visibleOffsetForMarkdownOffset', () => {
+    it('skips heading and emphasis syntax', () => {
+        const markdown = '# Title\n\nA **bold** sentence.';
+
+        expect(visibleOffsetForMarkdownOffset(markdown, 2)).toBe(0);
+        expect(visibleOffsetForMarkdownOffset(markdown, markdown.indexOf('**'))).toBe(
+            'Title\n\nA '.length
+        );
+        expect(visibleOffsetForMarkdownOffset(markdown, markdown.length)).toBe(
+            'Title\n\nA bold sentence.'.length
+        );
     });
 });
 

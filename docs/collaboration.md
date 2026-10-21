@@ -204,7 +204,9 @@ rich user's caret in the Markdown pane.
   caret and the selection highlight in rich mode.
 - Raw mode uses CodeMirror's remote caret and selection decorations, with the
   same colored name labels. Rich users keep publishing their approximate
-  `rawCursor`, so their carets stay visible in a raw collaborator's pane.
+  `rawCursor`, so their carets stay visible in a raw collaborator's pane. Raw
+  users publish an approximate rich cursor in return, so their caret is also
+  rendered in a rich collaborator's pane.
 - The editor status row shows compact initials avatars for every connected
   user, with the full name as a tooltip.
 - Color is never the only identifier: the name label and avatar tooltip are
@@ -488,7 +490,7 @@ not committed.
 | `npm run lint` / `npm run format` / `npm run typecheck` / `npm run build` | passed |
 | `yjs-server`: `npm run typecheck` | passed |
 | `yjs-server`: `npm test` | 19 passed |
-| Three-user live collaboration Playwright E2E | 38/38 checks passed |
+| Three-user live collaboration Playwright E2E | 39/39 checks passed |
 | New-note seed with empty TipTap placeholder | content seeded exactly once, no blank paragraphs |
 | Presence idle/heartbeat | avatars and raw caret labels survived 35 s |
 | Five-user concurrent editing | all five markers converged; one seed only |
@@ -503,7 +505,7 @@ not committed.
 | Raw Markdown on a live note | raw edits appeared in the rich pane; both raw users saw each other |
 | Rich/raw coexistence | rich users stayed editable, carets survived a raw editor joining, raw edits appeared after rich typing paused |
 | Raw remote carets | two raw editors saw each other's caret, label and selection |
-| Rich-to-raw presence | raw editors saw both rich collaborators' caret labels |
+| Cross-mode presence | raw editor saw rich carets; rich editors saw the raw caret |
 | Raw editor newlines | Enter created a new CodeMirror line and the snapshot kept the line break |
 | Empty note clearing | raw and rich panes cleared; the empty snapshot persisted and the file became empty |
 | Same-line rich/raw edits | both concurrent markers survived in the raw and rich panes |

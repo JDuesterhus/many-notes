@@ -7,6 +7,7 @@ import {
     findMarkdownOffsetForVisibleText,
     hasMeaningfulFragmentContent,
     replaceYText,
+    visibleOffsetForMarkdownOffset,
 } from '@/services/collaborationMarkdown';
 import {
     beaconSnapshot,
@@ -20,6 +21,7 @@ import { PresenceUser, YjsTokenResponse } from '@/types/collaboration';
 import { buildPresenceUser } from '@/utils/presence';
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
 import type { Editor } from '@tiptap/core';
+import { absolutePositionToRelativePosition, ySyncPluginKey } from '@tiptap/y-tiptap';
 import { computed, onBeforeUnmount, ref, shallowRef, watch, type Ref } from 'vue';
 import * as Y from 'yjs';
 
@@ -122,6 +124,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     let pendingProjection: string | null = null;
     let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
     let participantClearTimer: ReturnType<typeof setTimeout> | null = null;
+    let rawRichCursorActive = false;
 
     const snapshotUrl = VaultNodeSnapshotController.url({
         vault: options.vaultId,
@@ -928,6 +931,88 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     }
 
     /**
+     * Publish a raw caret to rich viewers. The Markdown offset is converted
+     * to visible text (syntax markers are skipped), then to a ProseMirror
+     * position and finally to a Yjs XML relative position so the existing
+     * CollaborationCaret can render it.
+     */
+    function updateRawCursor(anchor: number, head: number): void {
+        if (destroyed || !ytext || !editor || !options.isMarkdownMode.value || !canEdit.value) {
+            return;
+        }
+
+        const binding = ySyncPluginKey.getState(editor.state)?.binding;
+
+        if (!binding) {
+            return;
+        }
+
+        const markdown = ytext.toString();
+        const doc = editor.state.doc;
+        const textPositions: number[] = [];
+        let visibleText = '';
+        let firstBlock = true;
+
+        doc.descendants((node, position) => {
+            if (node.isText) {
+                const value = node.text ?? '';
+
+                for (let index = 0; index < value.length; index++) {
+                    textPositions.push(position + index);
+                }
+
+                visibleText += value;
+
+                return false;
+            }
+
+            if (node.isBlock && !firstBlock && visibleText.length > 0) {
+                visibleText += '\n';
+                textPositions.push(position);
+            }
+
+            if (node.isBlock) {
+                firstBlock = false;
+            }
+
+            return;
+        });
+
+        const positionFor = (sourceOffset: number): number => {
+            const visibleOffset = visibleOffsetForMarkdownOffset(markdown, sourceOffset);
+
+            if (visibleOffset <= 0) {
+                return Math.min((textPositions[0] ?? 0) + 1, doc.content.size);
+            }
+
+            if (visibleOffset >= textPositions.length) {
+                return Math.max(
+                    (textPositions[textPositions.length - 1] ?? doc.content.size) - 1,
+                    0
+                );
+            }
+
+            return textPositions[visibleOffset] ?? doc.content.size;
+        };
+
+        const pmAnchor = positionFor(anchor);
+        const pmHead = positionFor(head);
+        const anchorPosition = absolutePositionToRelativePosition(
+            pmAnchor,
+            binding.type,
+            binding.mapping
+        );
+        const headPosition = absolutePositionToRelativePosition(
+            pmHead,
+            binding.type,
+            binding.mapping
+        );
+
+        rawRichCursorActive = true;
+        setAwarenessField('cursor', { anchor: anchorPosition, head: headPosition });
+    }
+
+    /**
      * Re-announce the local identity after a reconnect or visibility change.
      * Hocuspocus may publish an empty awareness map during a reconnect, so
      * setting these fields only once at construction lets other users vanish
@@ -1127,9 +1212,12 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
                 if (
                     field === 'cursor' &&
                     value === null &&
-                    !options.isMarkdownMode.value &&
-                    lastRichCursor !== null
+                    ((!options.isMarkdownMode.value && lastRichCursor !== null) ||
+                        (options.isMarkdownMode.value && rawRichCursorActive))
                 ) {
+                    // The hidden TipTap editor still runs yCursorPlugin in raw
+                    // mode. It must not clear the approximate rich cursor we
+                    // publish for this raw selection.
                     return;
                 }
 
@@ -1157,6 +1245,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     }
 
     watch(options.isMarkdownMode, markdownMode => {
+        rawRichCursorActive = false;
         setAwarenessField('mode', markdownMode ? 'raw' : 'rich');
         clearRawCursor();
         endEditing();
@@ -1279,6 +1368,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         onContentChange,
         updateRichBase,
         updateRichCursor,
+        updateRawCursor,
         clearRawCursor,
         getMarkdown,
         beginEditing,

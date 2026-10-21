@@ -25,6 +25,7 @@ const emit = defineEmits<{
     focus: [];
     blur: [];
     activity: [];
+    selection: [anchor: number, head: number];
 }>();
 
 const host = ref<HTMLElement | null>(null);
@@ -169,6 +170,14 @@ function createEditor(): void {
                     );
 
                     if (update.selectionSet) {
+                        if (!remoteSync) {
+                            emit(
+                                'selection',
+                                update.state.selection.main.anchor,
+                                update.state.selection.main.head
+                            );
+                        }
+
                         emit('activity');
                     }
 
@@ -199,6 +208,11 @@ function createEditor(): void {
     // user edit; mark the editor ready only after the initial render settles.
     setTimeout(() => {
         readyForUserInput = true;
+        emit(
+            'selection',
+            view?.state.selection.main.anchor ?? 0,
+            view?.state.selection.main.head ?? 0
+        );
     }, 100);
 }
 

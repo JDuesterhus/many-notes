@@ -22,6 +22,7 @@ foreach (['a', 'b', 'c'] as $suffix) {
         [
             'name' => 'Live User '.strtoupper($suffix),
             'password' => $password,
+            'last_visited_url' => null,
         ],
     );
 }

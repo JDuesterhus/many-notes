@@ -67,12 +67,17 @@ async function login(browser, email) {
         const text = message.text();
 
         // Reverb is not part of this local test harness. A 409 is a handled
-        // snapshot conflict and is retried by the client.
-        if (text.includes('/ws/app/') || text.includes('409 (Conflict)')) {
+        // snapshot conflict and is retried by the client. The favicon is not
+        // part of the application and is not served by `artisan serve`.
+        if (
+            text.includes('/ws/app/') ||
+            text.includes('409 (Conflict)') ||
+            message.location().url.includes('favicon')
+        ) {
             return;
         }
 
-        consoleErrors.push(`console ${email}: ${text}`);
+        consoleErrors.push(`console ${email}: ${text} @ ${message.location().url}`);
     });
 
     await page.goto(`${BASE}/login`);
@@ -291,7 +296,14 @@ async function main() {
 
         await charlie.page.evaluate(() => window.dispatchEvent(new Event('blur')));
         await toggleRaw(charlie.page);
-        await sleep(500);
+        await alice.page.waitForFunction(
+            () =>
+                [...document.querySelectorAll('.collaboration-carets__label')].some(label =>
+                    (label.textContent ?? '').includes('Live User C')
+                ),
+            null,
+            { timeout: 5_000 }
+        );
 
         check(
             'raw user remains visible in rich avatars',
@@ -305,7 +317,13 @@ async function main() {
         );
         check(
             'rich carets do not disappear when another user enters raw mode',
-            (await richCaretCount(alice.page)) >= 1 && (await richCaretCount(bob.page)) >= 1
+            (await richCaretCount(alice.page)) >= 2 && (await richCaretCount(bob.page)) >= 2
+        );
+        check(
+            'rich users see the raw user caret',
+            (await alice.page.locator('.collaboration-carets__label').allTextContents()).some(
+                name => name.includes('Live User C')
+            )
         );
         check(
             'raw user sees rich carets in the Markdown pane',

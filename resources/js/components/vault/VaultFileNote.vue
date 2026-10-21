@@ -76,6 +76,7 @@ const {
     onContentChange,
     updateRichBase,
     updateRichCursor,
+    updateRawCursor,
     getMarkdown,
     beginEditing,
     noteEditingActivity,
@@ -109,6 +110,12 @@ function handleRawBlur(): void {
     if (isLive.value) {
         endEditing();
         void collaboration.flush();
+    }
+}
+
+function handleRawSelection(anchor: number, head: number): void {
+    if (isLive.value) {
+        updateRawCursor(anchor, head);
     }
 }
 const { editor, setContent, replaceContent, rewriteVaultLinks, onMarkdownChanged, readMarkdown } =
@@ -260,6 +267,7 @@ onUnmounted(() => {
             @focus="handleRawFocus"
             @blur="handleRawBlur"
             @activity="noteEditingActivity"
+            @selection="handleRawSelection"
         />
 
         <div
