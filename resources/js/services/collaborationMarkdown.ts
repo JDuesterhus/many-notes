@@ -8,6 +8,15 @@ export interface TextChange {
 }
 
 /**
+ * TipTap installs an empty paragraph as soon as its collaboration binding
+ * mounts. A serialized Y.XmlFragment containing only that placeholder is not
+ * note content and must not block the initial Markdown seed.
+ */
+export function hasMeaningfulFragmentContent(serialized: string): boolean {
+    return serialized.replace(/<paragraph(?:\s[^>]*)?><\/paragraph>/g, '').trim().length > 0;
+}
+
+/**
  * Returns the smallest single replacement that turns `current` into `next`.
  * Common prefix and suffix are kept so a normal keystroke only touches one
  * character in the shared Y.Text.
@@ -56,6 +65,201 @@ export function replaceYText(ytext: Y.Text, next: string, origin: string): boole
 
         if (change.inserted.length > 0) {
             ytext.insert(change.start, change.inserted);
+        }
+    }, origin);
+
+    return true;
+}
+
+/**
+ * Applies only the rich editor's local change to the shared Y.Text. The
+ * previous rich Markdown is the base; any raw text which arrived meanwhile
+ * is retained and the local offset is shifted around it.
+ *
+ * A full replace is not safe here: if a raw user appended text while the rich
+ * editor was typing, the rich client may not have seen that append yet.
+ * Replacing the full document would delete the raw insert.
+ */
+/**
+ * Approximate a ProseMirror text position in the shared Markdown. The rich
+ * editor hides Markdown syntax, so use the last visible characters before the
+ * caret as an anchor and search them in the source. This is intentionally
+ * best-effort: an off-by-a-few-characters caret is still useful, while a caret
+ * that disappears entirely is not.
+ */
+function stripMarkdownSyntax(markdown: string): { text: string; map: number[] } {
+    let text = '';
+    const map: number[] = [];
+
+    for (let index = 0; index < markdown.length; index++) {
+        const character = markdown[index]!;
+
+        if (character === '\\' && index + 1 < markdown.length) {
+            index++;
+            text += markdown[index];
+            map.push(index);
+            continue;
+        }
+
+        if (character === '!' && markdown[index + 1] === '[') {
+            index++;
+            continue;
+        }
+
+        if (character === '[') {
+            continue;
+        }
+
+        if (character === ']') {
+            if (markdown[index + 1] === '(') {
+                let cursor = index + 2;
+
+                while (cursor < markdown.length && markdown[cursor] !== ')') {
+                    cursor++;
+                }
+
+                index = cursor;
+            }
+
+            continue;
+        }
+
+        if (character === '*' || character === '_' || character === '`' || character === '~') {
+            continue;
+        }
+
+        const lineStart = index === 0 || markdown[index - 1] === '\n';
+
+        if (lineStart && (character === '#' || character === '>')) {
+            let cursor = index + 1;
+
+            while (cursor < markdown.length && markdown[cursor] === ' ') {
+                cursor++;
+            }
+
+            index = cursor - 1;
+            continue;
+        }
+
+        if (lineStart && (character === '-' || character === '+') && markdown[index + 1] === ' ') {
+            index++;
+            continue;
+        }
+
+        text += character;
+        map.push(index);
+    }
+
+    return { text, map };
+}
+
+function markdownOffsetAt(text: string, map: number[], offset: number, markdown: string): number {
+    if (text.length === 0 || map.length === 0) {
+        return 0;
+    }
+
+    if (offset <= 0) {
+        return map[0] ?? 0;
+    }
+
+    if (offset >= map.length) {
+        return markdown.length;
+    }
+
+    return map[offset] ?? markdown.length;
+}
+
+export function findMarkdownOffsetForVisibleText(markdown: string, visiblePrefix: string): number {
+    const snippet = visiblePrefix.slice(-48);
+
+    if (snippet.length === 0) {
+        return 0;
+    }
+
+    const { text, map } = stripMarkdownSyntax(markdown);
+    const index = text.lastIndexOf(snippet);
+
+    if (index >= 0) {
+        return markdownOffsetAt(text, map, index + snippet.length, markdown);
+    }
+
+    const rawIndex = markdown.lastIndexOf(snippet);
+
+    if (rawIndex >= 0) {
+        return rawIndex + snippet.length;
+    }
+
+    // Formatting can break a plain-text snippet (for example a bold marker in
+    // the middle). Fall back to a shorter suffix and then to the end of the
+    // prefix, clamped to the source.
+    for (let length = Math.min(24, snippet.length - 1); length >= 8; length -= 4) {
+        const shorter = snippet.slice(-length);
+
+        for (const [source, sourceMap] of [
+            [text, map],
+            [markdown, [] as number[]],
+        ] as const) {
+            const sourceIndex = source.lastIndexOf(shorter);
+
+            if (sourceIndex >= 0 && sourceMap.length > 0) {
+                return markdownOffsetAt(source, sourceMap, sourceIndex + shorter.length, markdown);
+            }
+
+            if (sourceIndex >= 0) {
+                return sourceIndex + shorter.length;
+            }
+        }
+    }
+
+    return Math.min(visiblePrefix.length, markdown.length);
+}
+
+export function applyRichTextChange(
+    ytext: Y.Text,
+    base: string,
+    next: string,
+    origin: string
+): boolean {
+    const localChange = diffText(base, next);
+
+    if (!localChange) {
+        return false;
+    }
+
+    const current = ytext.toString();
+    const remoteChange = diffText(base, current);
+
+    if (!remoteChange) {
+        return replaceYText(ytext, next, origin);
+    }
+
+    let start = mapTextOffset(localChange.start, remoteChange);
+    let end = mapTextOffset(localChange.start + localChange.removed, remoteChange);
+
+    if (start > end) {
+        [start, end] = [end, start];
+    }
+
+    // A pure insert at the same position as a raw insert keeps both values.
+    // For an overlapping replacement, append the rich text instead of
+    // deleting a remote change we have not rendered yet.
+    const overlapsRemote =
+        localChange.removed > 0 &&
+        localChange.start < remoteChange.start + remoteChange.removed &&
+        remoteChange.start < localChange.start + localChange.removed;
+
+    if (overlapsRemote) {
+        start = current.length;
+        end = current.length;
+    }
+
+    ytext.doc?.transact(() => {
+        if (end > start) {
+            ytext.delete(start, end - start);
+        }
+
+        if (localChange.inserted.length > 0) {
+            ytext.insert(start, localChange.inserted);
         }
     }, origin);
 

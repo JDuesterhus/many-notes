@@ -1,4 +1,5 @@
-﻿import { markdownToHTML, prepareTiptapHTML } from '@/services/markdown';
+﻿import { hasMeaningfulFragmentContent } from '@/services/collaborationMarkdown';
+import { markdownToHTML, prepareTiptapHTML } from '@/services/markdown';
 import { CustomCodeBlockLowlight } from '@/services/tiptap/extension-custom-code-block-low-light';
 import { CustomImage } from '@/services/tiptap/extension-custom-image';
 import { CustomLink } from '@/services/tiptap/extension-custom-link';
@@ -43,6 +44,7 @@ interface SetupEditorOptions {
     onFocus?: () => void;
     onActivity?: () => void;
     onBlur?: () => void;
+    onSelectionChange?: (anchor: number, head: number) => void;
     openFilePath: (path: string) => void;
     uploadFiles: (request: VaultFileUploadRequest) => void;
     collaboration?: EditorCollaboration | null;
@@ -181,7 +183,17 @@ export function useEditor(options: SetupEditorOptions) {
 
                 if (instance && collaboration) {
                     options.onEditorReady?.(instance, setContent, readMarkdown);
+                    options.onSelectionChange?.(
+                        instance.state.selection.anchor,
+                        instance.state.selection.head
+                    );
                 }
+            },
+            onSelectionUpdate({ editor: instance }) {
+                options.onSelectionChange?.(
+                    instance.state.selection.anchor,
+                    instance.state.selection.head
+                );
             },
             onFocus() {
                 options.onFocus?.();
@@ -309,9 +321,17 @@ export function useEditor(options: SetupEditorOptions) {
             const doc = createDocument(markdownToHTML(markdown), instance.schema);
             const fragment = collaboration.document.getXmlFragment('default');
             const binding = ySyncPluginKey.getState(instance.state)?.binding;
+            const fragmentIsEmpty = !hasMeaningfulFragmentContent(fragment.toString());
 
             collaboration.document.transact(() => {
-                if (binding) {
+                if (fragmentIsEmpty) {
+                    // TipTap inserts an empty paragraph before the seed arrives.
+                    // Reusing that placeholder leaves blank paragraphs in front
+                    // of the first heading. There is no caret to preserve yet,
+                    // so replace the placeholder outright.
+                    fragment.delete(0, fragment.length);
+                    prosemirrorToYXmlFragment(doc, fragment);
+                } else if (binding) {
                     // Reconcile against the existing Yjs node mapping instead
                     // of replacing every node. Remote rich selections and
                     // carets survive a raw projection this way.

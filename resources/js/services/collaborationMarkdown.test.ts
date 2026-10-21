@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { diffText, mapTextOffset, mergeMarkdown, replaceYText } from './collaborationMarkdown';
+import {
+    applyRichTextChange,
+    diffText,
+    findMarkdownOffsetForVisibleText,
+    hasMeaningfulFragmentContent,
+    mapTextOffset,
+    mergeMarkdown,
+    replaceYText,
+} from './collaborationMarkdown';
 
 describe('diffText', () => {
     it('returns null for identical text', () => {
@@ -64,6 +72,58 @@ describe('replaceYText', () => {
     });
 });
 
+describe('findMarkdownOffsetForVisibleText', () => {
+    it('maps visible paragraph text after Markdown syntax', () => {
+        const markdown = '# Title\n\nA **bold** sentence.';
+
+        expect(findMarkdownOffsetForVisibleText(markdown, 'A bold sentence.')).toBe(
+            markdown.length
+        );
+    });
+
+    it('uses the last visible snippet as a caret anchor', () => {
+        const markdown = '# Title\n\nA paragraph.\n\nSecond paragraph.';
+
+        expect(findMarkdownOffsetForVisibleText(markdown, 'A paragraph.\n\nSecond')).toBe(
+            markdown.indexOf('Second') + 'Second'.length
+        );
+    });
+
+    it('returns zero for an empty prefix', () => {
+        expect(findMarkdownOffsetForVisibleText('# Title', '')).toBe(0);
+    });
+});
+
+describe('applyRichTextChange', () => {
+    it('keeps a raw append which the rich client had not rendered yet', () => {
+        const doc = new Y.Doc();
+        const text = doc.getText('markdown');
+        text.insert(0, 'alpha\n');
+
+        // Raw user appends before the rich editor reports its own change.
+        text.insert(text.length, 'RAW\n');
+
+        expect(applyRichTextChange(text, 'alpha\n', 'alpha\nRICH\n', 'rich')).toBe(true);
+        expect(text.toString()).toBe('alpha\nRICH\nRAW\n');
+
+        doc.destroy();
+    });
+
+    it('shifts the rich change after a remote insert before it', () => {
+        const doc = new Y.Doc();
+        const text = doc.getText('markdown');
+        text.insert(0, 'alpha\nbeta\n');
+        text.insert(0, 'RAW\n');
+
+        expect(applyRichTextChange(text, 'alpha\nbeta\n', 'alpha\nRICH\nbeta\n', 'rich')).toBe(
+            true
+        );
+        expect(text.toString()).toBe('RAW\nalpha\nRICH\nbeta\n');
+
+        doc.destroy();
+    });
+});
+
 describe('mergeMarkdown', () => {
     it('keeps non-overlapping local and remote changes', () => {
         const base = 'one\ntwo\nthree';
@@ -75,6 +135,24 @@ describe('mergeMarkdown', () => {
 
     it('keeps the local side on a true conflict', () => {
         expect(mergeMarkdown('same', 'local', 'remote')).toBe('local');
+    });
+});
+
+describe('hasMeaningfulFragmentContent', () => {
+    it('treats an empty TipTap paragraph as no content', () => {
+        expect(hasMeaningfulFragmentContent('<paragraph></paragraph>')).toBe(false);
+        expect(hasMeaningfulFragmentContent('<paragraph ychange="{}"></paragraph>')).toBe(false);
+        expect(hasMeaningfulFragmentContent('')).toBe(false);
+    });
+
+    it('recognizes headings, text and lists', () => {
+        expect(hasMeaningfulFragmentContent('<heading level="1">Title</heading>')).toBe(true);
+        expect(hasMeaningfulFragmentContent('<paragraph>Body</paragraph>')).toBe(true);
+        expect(
+            hasMeaningfulFragmentContent(
+                '<bulletlist><listitem><paragraph>one</paragraph></listitem></bulletlist>'
+            )
+        ).toBe(true);
     });
 });
 

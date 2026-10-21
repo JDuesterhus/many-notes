@@ -2,7 +2,12 @@
 import YjsSeedClaimController from '@/actions/App/Http/Controllers/YjsSeedClaimController';
 import YjsSeedCompleteController from '@/actions/App/Http/Controllers/YjsSeedCompleteController';
 import YjsTokenController from '@/actions/App/Http/Controllers/YjsTokenController';
-import { mergeMarkdown, replaceYText } from '@/services/collaborationMarkdown';
+import {
+    applyRichTextChange,
+    findMarkdownOffsetForVisibleText,
+    hasMeaningfulFragmentContent,
+    replaceYText,
+} from '@/services/collaborationMarkdown';
 import {
     beaconSnapshot,
     claimYjsSeed,
@@ -100,7 +105,6 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     let lastProjectedMarkdown: string | null = null;
     let lastRichCursor: unknown = null;
     let lastProjectionOwner: number | null = null;
-    let lastHadRichEditor = false;
     let editingActive = false;
     let editingTimer: ReturnType<typeof setTimeout> | null = null;
     let richProjectionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -114,6 +118,10 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     let destroyed = false;
     let hadSynced = false;
     let synced = false;
+    let projectionInFlight = false;
+    let pendingProjection: string | null = null;
+    let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    let participantClearTimer: ReturnType<typeof setTimeout> | null = null;
 
     const snapshotUrl = VaultNodeSnapshotController.url({
         vault: options.vaultId,
@@ -140,7 +148,8 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
         if (!awareness) {
             participants.value = [];
-            lastHadRichEditor = false;
+            lastProjectionOwner = null;
+
             return;
         }
 
@@ -156,6 +165,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         }
 
         const users: PresenceUser[] = [];
+        const seenUsers = new Set<string>();
         const editors: EditingState[] = [];
 
         awareness.getStates().forEach((rawState, clientId) => {
@@ -179,7 +189,10 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
                 mode: state.mode === 'raw' ? 'raw' : 'rich',
             };
 
-            if (clientId !== ownClientId) {
+            // Several tabs of the same account are one collaborator in the
+            // avatar list. In-text carets remain per client.
+            if (clientId !== ownClientId && !seenUsers.has(presence.id)) {
+                seenUsers.add(presence.id);
                 users.push(presence);
             }
 
@@ -193,7 +206,37 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             }
         });
 
-        participants.value = users.sort((a, b) => a.id.localeCompare(b.id));
+        if (users.length > 0) {
+            if (participantClearTimer) {
+                clearTimeout(participantClearTimer);
+                participantClearTimer = null;
+            }
+
+            participants.value = users.sort((a, b) => a.id.localeCompare(b.id));
+        } else if (participants.value.length > 0 && participantClearTimer === null) {
+            // A reconnect briefly publishes an empty awareness map before
+            // remote clients re-announce themselves. Keep the last list for a
+            // short grace period instead of making avatars blink.
+            participantClearTimer = setTimeout(() => {
+                participantClearTimer = null;
+
+                const awareness = provider.value?.awareness;
+                const ownClientId = awareness?.clientID;
+                const hasRemoteUser = [...(awareness?.getStates() ?? [])].some(
+                    ([clientId, state]) =>
+                        clientId !== ownClientId && !!(state as { user?: PresenceUser }).user
+                );
+
+                if (hasRemoteUser) {
+                    updateParticipants();
+
+                    return;
+                }
+
+                participants.value = [];
+            }, 3000);
+        }
+
         awarenessVersion.value++;
 
         const rawOwner =
@@ -201,24 +244,17 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
                 .filter(editor => editor.mode === 'raw')
                 .sort((a, b) => a.clientId - b.clientId)[0]?.clientId ?? null;
         const previousOwner = lastProjectionOwner;
-        const richActive = editors.some(editor => editor.mode === 'rich');
-        const wasRichActive = lastHadRichEditor;
-        lastHadRichEditor = richActive;
 
         if (rawOwner !== previousOwner) {
-            if (previousOwner === ownClientId) {
-                if (richProjectionTimer) {
-                    clearTimeout(richProjectionTimer);
-                    richProjectionTimer = null;
-                }
+            if (previousOwner === ownClientId && richProjectionTimer) {
+                clearTimeout(richProjectionTimer);
+                richProjectionTimer = null;
             }
 
             lastProjectionOwner = rawOwner;
 
             if (
-                rawOwner === ownClientId &&
-                options.isMarkdownMode.value &&
-                !richActive &&
+                (rawOwner === ownClientId || (rawOwner === null && isProjectionOwner())) &&
                 ytext &&
                 ytext.toString() !== lastProjectedMarkdown
             ) {
@@ -226,16 +262,11 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             }
         }
 
-        // Rich editing has priority and keeps its carets. As soon as no rich
-        // editor is active, one elected client projects accumulated raw
-        // changes into the fragment. Comparing content prevents a projection
-        // (and a caret reset) when a user merely switches to raw mode.
         if (
-            wasRichActive &&
-            !richActive &&
             isProjectionOwner() &&
             ytext &&
-            ytext.toString() !== lastProjectedMarkdown
+            ytext.toString() !== lastProjectedMarkdown &&
+            !hasActiveRichEditor()
         ) {
             scheduleRichProjection();
         }
@@ -395,14 +426,37 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     }
 
     async function applyMarkdownToRich(markdown: string): Promise<void> {
-        if (!editor || !setEditorContent || destroyed || markdown === lastRichMarkdown) {
+        if (!editor || !setEditorContent || destroyed) {
             return;
         }
 
-        lastRichMarkdown = markdown;
+        // A raw editor may produce several Y.Text batches while the previous
+        // projection is still being parsed. Keep only the newest value and
+        // never let two async TipTap replacements overlap.
+        pendingProjection = markdown;
 
-        await setEditorContent(markdown);
-        lastProjectedMarkdown = markdown;
+        if (projectionInFlight) {
+            return;
+        }
+
+        projectionInFlight = true;
+
+        try {
+            while (pendingProjection !== null && !destroyed) {
+                const next = pendingProjection;
+                pendingProjection = null;
+
+                if (next === lastRichMarkdown) {
+                    continue;
+                }
+
+                lastRichMarkdown = next;
+                await setEditorContent(next);
+                lastProjectedMarkdown = next;
+            }
+        } finally {
+            projectionInFlight = false;
+        }
     }
 
     function isProjectionOwner(): boolean {
@@ -429,7 +483,8 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
         // The raw editor may have stopped typing while rich users were still
         // active. Elect the remaining raw viewer to flush the accumulated
-        // Markdown once rich editing pauses.
+        // Markdown. If every raw viewer left, one remaining client still has
+        // to materialize the last raw value into the rich fragment.
         const rawViewer = states
             .filter(([, state]) => {
                 const presence = state as { user?: PresenceUser; mode?: 'rich' | 'raw' };
@@ -439,7 +494,13 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             .map(([clientId]) => clientId)
             .sort((a, b) => a - b)[0];
 
-        return rawViewer === ownClientId;
+        if (rawViewer !== undefined) {
+            return rawViewer === ownClientId;
+        }
+
+        const anyClient = states.map(([clientId]) => clientId).sort((a, b) => a - b)[0];
+
+        return anyClient === undefined || anyClient === ownClientId;
     }
 
     function hasActiveRichEditor(): boolean {
@@ -464,10 +525,22 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         richProjectionTimer = setTimeout(() => {
             richProjectionTimer = null;
 
-            if (ytext && !hasActiveRichEditor() && ytext.toString() !== lastProjectedMarkdown) {
-                void applyMarkdownToRich(ytext.toString());
+            if (!ytext || ytext.toString() === lastProjectedMarkdown) {
+                return;
             }
-        }, 120);
+
+            // Replacing the fragment while a rich user is in the middle of a
+            // transaction can delete their concurrent edit. Raw input is
+            // already visible in Y.Text immediately; wait for a short rich
+            // idle window and then reconcile the fragment once.
+            if (hasActiveRichEditor()) {
+                scheduleRichProjection();
+
+                return;
+            }
+
+            void applyMarkdownToRich(ytext.toString());
+        }, 180);
     }
 
     function finishReady(): void {
@@ -510,7 +583,19 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     }
 
     function hasYjsContent(): boolean {
-        return (ydoc?.getXmlFragment('default').length ?? 0) > 0 || (ytext?.length ?? 0) > 0;
+        if (!ydoc) {
+            return false;
+        }
+
+        if ((ytext?.length ?? 0) > 0) {
+            return true;
+        }
+
+        // TipTap creates an empty paragraph as soon as the collaboration
+        // binding mounts. That placeholder must not be mistaken for real
+        // note content, otherwise a new note is marked as seeded while its
+        // Markdown body is still waiting to be copied from the database.
+        return hasMeaningfulFragmentContent(ydoc.getXmlFragment('default').toString());
     }
 
     /**
@@ -646,19 +731,11 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             return;
         }
 
-        if (tokenData?.yjs_state_exists === true) {
-            await ensureMirrors();
-            markSeeded();
-            finishReady();
-
-            return;
-        }
-
-        const shouldSeed =
-            tokenData?.yjs_state_exists === false ||
-            (tokenData?.yjs_state_exists === null && tokenData?.seeded !== true);
-
-        if (!shouldSeed) {
+        // `seeded_at` is the authoritative marker for an intentionally empty
+        // note. A Yjs state existing is not enough: Hocuspocus creates an
+        // empty document state as soon as the first client connects, and
+        // TipTap also inserts an empty paragraph immediately.
+        if (tokenData?.seeded === true && tokenData.yjs_state_exists !== false) {
             await ensureMirrors();
             markSeeded();
             finishReady();
@@ -769,7 +846,12 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
     function updateRichBase(markdown: string): void {
         lastRichMarkdown = markdown;
-        lastProjectedMarkdown = ytext?.toString() ?? markdown;
+
+        // This callback describes what the rich fragment currently contains,
+        // not what Y.Text contains. During simultaneous raw editing those two
+        // differ until the projection runs. Marking Y.Text as projected here
+        // used to suppress that projection forever.
+        lastProjectedMarkdown = markdown;
     }
 
     function onContentChange(markdown: string): void {
@@ -777,22 +859,28 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             return;
         }
 
-        const current = ytext?.toString() ?? lastMarkdown;
-        const merged = mergeMarkdown(lastRichMarkdown ?? current, markdown, current);
+        const base = lastRichMarkdown ?? ytext?.toString() ?? lastMarkdown;
+
+        // Apply only the rich delta. `current` can already contain a raw edit
+        // which the rich editor has not rendered yet; a full replacement
+        // would silently delete it during simultaneous typing.
+        if (ytext) {
+            applyRichTextChange(ytext, base, markdown, RICH_ORIGIN);
+        }
 
         lastRichMarkdown = markdown;
         lastProjectedMarkdown = markdown;
 
-        if (ytext) {
-            replaceYText(ytext, merged, RICH_ORIGIN);
+        const current = ytext?.toString() ?? markdown;
+
+        if (current !== lastMarkdown) {
+            lastMarkdown = current;
+            scheduleSnapshot();
         }
 
-        if (merged === lastMarkdown) {
-            return;
+        if (ytext && current !== markdown && isProjectionOwner()) {
+            scheduleRichProjection();
         }
-
-        lastMarkdown = merged;
-        scheduleSnapshot();
     }
 
     function clearRawCursor(): void {
@@ -801,6 +889,63 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         }
 
         setAwarenessField('rawCursor', null);
+    }
+
+    /**
+     * Publish the rich caret to raw viewers as a Y.Text range. Raw editors
+     * only render `rawCursor`; without this a rich collaborator is visible in
+     * the avatar row but has no caret in the Markdown pane.
+     */
+    function updateRichCursor(anchor: number, head: number): void {
+        if (destroyed || !ytext || !editor || options.isMarkdownMode.value) {
+            return;
+        }
+
+        const markdown = ytext.toString();
+
+        if (markdown.length === 0) {
+            return;
+        }
+
+        const offsetFor = (position: number): number => {
+            const visible = editor?.state.doc.textBetween(0, position, '\n', '\n') ?? '';
+
+            return Math.max(
+                0,
+                Math.min(markdown.length, findMarkdownOffsetForVisibleText(markdown, visible))
+            );
+        };
+
+        const anchorOffset = offsetFor(anchor);
+        const headOffset = offsetFor(head);
+        const anchorPosition = Y.createRelativePositionFromTypeIndex(ytext, anchorOffset, -1);
+        const headPosition = Y.createRelativePositionFromTypeIndex(ytext, headOffset, 1);
+
+        setAwarenessField('rawCursor', {
+            anchor: anchorPosition,
+            head: headPosition,
+        });
+    }
+
+    /**
+     * Re-announce the local identity after a reconnect or visibility change.
+     * Hocuspocus may publish an empty awareness map during a reconnect, so
+     * setting these fields only once at construction lets other users vanish
+     * until the page is reloaded.
+     */
+    function applyLocalPresence(): void {
+        const awareness = provider.value?.awareness;
+
+        if (!awareness || destroyed) {
+            return;
+        }
+
+        awareness.setLocalStateField('user', localUser);
+        awareness.setLocalStateField('mode', options.isMarkdownMode.value ? 'raw' : 'rich');
+
+        if (editingActive) {
+            awareness.setLocalStateField('editing', true);
+        }
     }
 
     function attachEditor(
@@ -885,20 +1030,25 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
     }
 
     function onWindowBlur(): void {
+        // Keep the last cursor. Clearing it on focusout made collaborators
+        // blink out whenever the user clicked a toolbar, a link preview or
+        // another application.
         endEditing();
-        clearRawCursor();
         void flush();
     }
 
     function onVisibilityChange(): void {
         if (document.visibilityState === 'hidden') {
             endEditing();
-            clearRawCursor();
             flushOnPageHide();
+
+            return;
         }
+
+        applyLocalPresence();
     }
 
-    function textObserver(_event: Y.YTextEvent, transaction: Y.Transaction): void {
+    function textObserver(_event: Y.YTextEvent, _transaction: Y.Transaction): void {
         if (!ytext || destroyed) {
             return;
         }
@@ -910,16 +1060,11 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             scheduleSnapshot();
         }
 
-        if (transaction.origin === RICH_ORIGIN || transaction.origin === SEED_ORIGIN) {
-            return;
-        }
-
-        if (
-            options.isMarkdownMode.value &&
-            !hasActiveRichEditor() &&
-            isProjectionOwner() &&
-            next !== lastRichMarkdown
-        ) {
+        // A rich edit writes its serialization into Y.Text. If that merge also
+        // contains a raw edit which has not reached the fragment yet, the raw
+        // owner still has to project it. Comparing against the last projected
+        // value avoids an echo for the rich change itself.
+        if (isProjectionOwner() && next !== lastProjectedMarkdown) {
             scheduleRichProjection();
         }
     }
@@ -946,6 +1091,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             },
             onAuthenticated: () => {
                 setStatus('connected');
+                applyLocalPresence();
             },
             onAuthenticationFailed: () => {
                 const nextStatus = lastTokenStatus ?? 'no-permission';
@@ -958,6 +1104,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             },
             onSynced: ({ state }) => {
                 if (state) {
+                    applyLocalPresence();
                     handleSynced();
                 } else {
                     setStatus('reconnecting');
@@ -996,6 +1143,13 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         provider.value.setAwarenessField('editingSince', 0);
         provider.value.setAwarenessField('rawCursor', null);
 
+        // Awareness entries are heartbeated by the provider, but a tab that
+        // was throttled or briefly offline can be dropped by the server.
+        // Re-announcing identity periodically keeps collaborators visible
+        // without waiting for a reload.
+        presenceHeartbeatTimer = setInterval(applyLocalPresence, 10_000);
+        updateParticipants();
+
         window.addEventListener('blur', onWindowBlur);
         document.addEventListener('visibilitychange', onVisibilityChange);
         window.addEventListener('pagehide', flushOnPageHide);
@@ -1006,6 +1160,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         setAwarenessField('mode', markdownMode ? 'raw' : 'rich');
         clearRawCursor();
         endEditing();
+        applyLocalPresence();
 
         if (markdownMode) {
             // The TipTap caret is meaningless in raw mode; clear it so rich
@@ -1025,6 +1180,10 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
             if (ytext.toString() !== lastProjectedMarkdown) {
                 void applyMarkdownToRich(ytext.toString());
+            }
+
+            if (editor) {
+                updateRichCursor(editor.state.selection.anchor, editor.state.selection.head);
             }
         }
     });
@@ -1073,6 +1232,17 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             clearTimeout(seedTimer);
         }
 
+        if (presenceHeartbeatTimer) {
+            clearInterval(presenceHeartbeatTimer);
+            presenceHeartbeatTimer = null;
+        }
+
+        if (participantClearTimer) {
+            clearTimeout(participantClearTimer);
+            participantClearTimer = null;
+        }
+
+        pendingProjection = null;
         ytext?.unobserve(textObserver);
 
         window.removeEventListener('blur', onWindowBlur);
@@ -1108,6 +1278,7 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         attachEditor,
         onContentChange,
         updateRichBase,
+        updateRichCursor,
         clearRawCursor,
         getMarkdown,
         beginEditing,

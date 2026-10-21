@@ -75,6 +75,7 @@ const {
     attachEditor,
     onContentChange,
     updateRichBase,
+    updateRichCursor,
     getMarkdown,
     beginEditing,
     noteEditingActivity,
@@ -107,7 +108,6 @@ function handleRawFocus(): void {
 function handleRawBlur(): void {
     if (isLive.value) {
         endEditing();
-        clearRawCursor();
         void collaboration.flush();
     }
 }
@@ -130,6 +130,11 @@ const { editor, setContent, replaceContent, rewriteVaultLinks, onMarkdownChanged
         onActivity: () => {
             if (isLive.value) {
                 noteEditingActivity();
+            }
+        },
+        onSelectionChange: (anchor, head) => {
+            if (isLive.value) {
+                updateRichCursor(anchor, head);
             }
         },
         onBlur: () => {

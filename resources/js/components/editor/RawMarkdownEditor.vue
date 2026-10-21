@@ -108,6 +108,17 @@ function cursorAwareness(real: Awareness): Awareness {
             return { ...state, cursor: presence.rawCursor ?? null };
         },
         setLocalStateField: (field: string, value: unknown) => {
+            // yCollab clears the cursor on focusout. Keep the last raw
+            // position so another user's presence does not blink out when the
+            // writer clicks a toolbar or another window.
+            if (field === 'cursor' && value === null) {
+                const state = real.getLocalState() as { rawCursor?: unknown } | null;
+
+                if (state?.rawCursor) {
+                    return;
+                }
+            }
+
             real.setLocalStateField(field === 'cursor' ? 'rawCursor' : field, value);
         },
         on: real.on.bind(real),

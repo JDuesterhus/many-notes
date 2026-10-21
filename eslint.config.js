@@ -25,6 +25,20 @@ export default [
         ],
     },
     {
+        files: ['tests/e2e/**/*.mjs'],
+        languageOptions: {
+            ecmaVersion: 'latest',
+            sourceType: 'module',
+            globals: {
+                ...globals.browser,
+                ...globals.node,
+            },
+        },
+        rules: {
+            'no-console': 'off',
+        },
+    },
+    {
         files: ['**/*.{ts,vue}'],
         languageOptions: {
             parser: vueParser,

@@ -18,9 +18,9 @@ Client debounced snapshot ── Markdown Y.Text ── Laravel ── vault_nod
 ```
 
 - **Live truth:** the Yjs document for the open note. It contains the rich
-  `default` XML fragment and a `markdown` Y.Text. Both represent the same note;
-  rich typing keeps priority while raw changes are projected in when rich typing
-  pauses.
+  `default` XML fragment and a `markdown` Y.Text. Both represent the same note.
+  Rich edits reach Y.Text immediately; raw edits reach the rich fragment after
+  a short rich-typing pause (at most the 1.5-second activity window).
 - **Materialized truth:** `vault_nodes.content` and the Markdown file on disk.
 - **Metadata events:** Laravel Reverb still broadcasts tree, tag, notification,
   collaboration and snapshot-sequence events.
@@ -86,12 +86,14 @@ sent to the browser.
 
 Existing notes have Markdown but no Yjs state. The rules are:
 
-1. If a Yjs document exists and is non-empty, Yjs wins. Markdown is
+1. If a Yjs document exists and has meaningful content, Yjs wins. Markdown is
    re-materialized from it by the next snapshot.
-2. If the Yjs document exists but is empty, the note is treated as intentionally
-   empty; it is not seeded again.
-3. If the Yjs document does not exist, the note is seeded from the current
-   `vault_nodes.content`.
+2. Hocuspocus creates an empty document store as soon as the first client
+   connects, and TipTap inserts an empty paragraph while its collaboration
+   binding mounts. Neither is treated as note content. If `seeded_at` is unset
+   and the database has Markdown, the body is seeded.
+3. If the Yjs document exists, `seeded_at` is set, and there is no Markdown,
+   the note was intentionally emptied; it is not seeded again.
 4. If both are missing, the note is empty.
 
 The seed is a **one-time client seed with a server-side lease**:
@@ -175,8 +177,8 @@ Awareness carries:
 ```js
 {
   user: { id, name, initials, color },
-  cursor: { anchor, head }, // rich mode only, Yjs relative positions
-  rawCursor: { anchor, head }, // raw mode only, Yjs relative positions
+  cursor: { anchor, head }, // rich mode, Yjs XML relative positions
+  rawCursor: { anchor, head }, // Y.Text relative positions, both modes
   mode: 'rich' | 'raw',
   editing: true,
   editingSince: 1760000000000
@@ -190,7 +192,9 @@ awareness update, so V1 intentionally keeps the single `cursor` field.
 `rawCursor` is the equivalent for the CodeMirror raw pane. It uses Yjs relative
 positions too, so it survives edits on either side. A small awareness proxy
 translates CodeMirror's `cursor` field to `rawCursor`, keeping the raw and rich
-cursor fields independent.
+cursor fields independent. A rich editor also publishes an approximate
+`rawCursor` derived from its visible selection, so a raw collaborator sees the
+rich user's caret in the Markdown pane.
 
 - Colors are deterministic from the user id and use a palette readable in light
   and dark themes.
@@ -199,13 +203,18 @@ cursor fields independent.
 - `CollaborationCaret` renders the colored caret, the name label above the
   caret and the selection highlight in rich mode.
 - Raw mode uses CodeMirror's remote caret and selection decorations, with the
-  same colored name labels.
+  same colored name labels. Rich users keep publishing their approximate
+  `rawCursor`, so their carets stay visible in a raw collaborator's pane.
 - The editor status row shows compact initials avatars for every connected
   user, with the full name as a tooltip.
 - Color is never the only identifier: the name label and avatar tooltip are
   always available.
-- Disconnecting removes the awareness state, both caret types and the top
-  avatar.
+- Identity is re-announced on reconnect, visibility changes and a 10-second
+  heartbeat. A reconnect briefly publishes an empty awareness map, so the
+  avatar list keeps the last values for a three-second grace period before it
+  removes users who really left.
+- Blur and idle keep the last caret. They no longer clear presence just because
+  the writer clicked a toolbar, another window or a different note.
 
 `editing` is a short 1.5-second activity flag, not a lock. It tells the raw
 projector when a rich editor is actively typing so the full-fragment update can
@@ -239,21 +248,22 @@ Raw Markdown is available for live notes. The toolbar toggle switches the same
 Yjs note between:
 
 - the rich TipTap pane, backed by the `default` XML fragment;
-- the raw `contenteditable` pane, backed by the `markdown` Y.Text.
+- the raw CodeMirror 6 pane, backed by the `markdown` Y.Text.
 
-Both representations live in one Y.Doc. The rich editor writes its serialized
-Markdown into `markdown`; the raw pane is CodeMirror 6 bound to the same
-`Y.Text` through `y-codemirror.next`; the missing side is projected before the
-note becomes editable. Automatic snapshots always read `markdown`, so a note has
-one materialized representation regardless of which pane is open.
+Both representations live in one Y.Doc. The rich editor writes only its local
+delta into `markdown`; the raw pane is CodeMirror 6 bound to the same `Y.Text`
+through `y-codemirror.next`; the missing side is projected before the note
+becomes editable. Automatic snapshots always read `markdown`, so a note has one
+materialized representation regardless of which pane is open.
 
 Because Markdown and a rich document cannot be merged character-by-character
 across representations, raw projection follows a **rich-first priority**:
 
 - rich users always keep an editable editor and their remote carets;
 - raw users edit the shared `markdown` Y.Text and get their own remote carets;
-- rich edits are mirrored into `markdown` immediately, so raw users see them
-  while both modes are active;
+- rich edits are mirrored into `markdown` immediately using a minimal delta,
+  so raw users see them while both modes are active and concurrent raw inserts
+  are not deleted;
 - raw changes are projected into the rich fragment once no rich editor has been
   active for 1.5 seconds (or immediately when nobody is typing rich);
 - multiple raw users co-edit through `Y.Text`; multiple rich users co-edit
@@ -265,9 +275,11 @@ into the rich fragment. Every raw client writing a full fragment replacement
 would race and duplicate content; a single projector keeps the rich view current
 while Y.Text remains the raw-side CRDT.
 
-This prevents a full-document raw replacement from overwriting concurrent rich
-edits. Installations with `YJS_ENABLED=false`, and non-Markdown files such as
-`.txt`, keep the legacy raw editor and its existing save path.
+The first projection replaces TipTap's empty placeholder paragraph instead of
+merging against it, so a seeded note does not gain blank paragraphs before its
+first heading. Later projections reconcile against the existing Yjs mapping to
+preserve rich carets. Installations with `YJS_ENABLED=false`, and non-Markdown
+files such as `.txt`, keep the legacy raw editor and its existing save path.
 
 ## Deployment
 
@@ -387,9 +399,9 @@ routes.
 - Raw changes reach the rich pane when rich typing pauses (1.5-second activity
   window); this keeps the rich XML fragment from being replaced while a rich
   user is mid-edit.
-- A true same-line conflict between a rich edit and a raw edit is resolved
-  line-wise; the rich CRDT remains authoritative for the rich pane and the raw
-  text remains authoritative for the raw pane until the next projection.
+- A same-line conflict between a rich edit and a raw edit preserves both
+  inserted values; their relative order is deterministic but may differ from
+  the order in which the users typed them.
 - Only SQLite is supported by the Hocuspocus authorization check out of the box.
 - No read-only collaborator role; every accepted collaborator can edit.
 - No public sharing, E2EE, comments or collaborative titles.
@@ -463,7 +475,7 @@ npm test
 
 ## Verification performed for this fork
 
-Environment: Windows for the build/test host, PHP 8.4.26, Node 22.23.3, SQLite,
+Environment: Windows for the build/test host, PHP 8.4.27, Node 22.23.3, SQLite,
 Chromium via Playwright 1.62.1, plus the OMV NAS Docker host. PHP, Node and
 Playwright were installed into a temporary tool directory for the run; they are
 not committed.
@@ -472,11 +484,13 @@ not committed.
 | --- | --- |
 | `composer analyse` (Rector, Pint, PHPCS, PHPStan level 10, type coverage) | passed; type coverage 100 % |
 | `composer test` (Pest, parallel) | 214 passed, 558 assertions |
-| `npm test` (Vitest, Markdown diff/merge) | 10 passed |
+| `npm test` (Vitest, Markdown diff/merge/seed detection) | 17 passed |
 | `npm run lint` / `npm run format` / `npm run typecheck` / `npm run build` | passed |
 | `yjs-server`: `npm run typecheck` | passed |
 | `yjs-server`: `npm test` | 19 passed |
-| Two/three-user Playwright E2E | 15/15 checks passed |
+| Three-user live collaboration Playwright E2E | 38/38 checks passed |
+| New-note seed with empty TipTap placeholder | content seeded exactly once, no blank paragraphs |
+| Presence idle/heartbeat | avatars and raw caret labels survived 35 s |
 | Five-user concurrent editing | all five markers converged; one seed only |
 | Large note (300 blocks) | opened in ~3.2 s; edits synced |
 | Note switching (8 round trips between notes) | no page errors; 0 connections left after close |
@@ -489,6 +503,7 @@ not committed.
 | Raw Markdown on a live note | raw edits appeared in the rich pane; both raw users saw each other |
 | Rich/raw coexistence | rich users stayed editable, carets survived a raw editor joining, raw edits appeared after rich typing paused |
 | Raw remote carets | two raw editors saw each other's caret, label and selection |
+| Rich-to-raw presence | raw editors saw both rich collaborators' caret labels |
 | Raw editor newlines | Enter created a new CodeMirror line and the snapshot kept the line break |
 | Empty note clearing | raw and rich panes cleared; the empty snapshot persisted and the file became empty |
 | Same-line rich/raw edits | both concurrent markers survived in the raw and rich panes |
@@ -496,7 +511,7 @@ not committed.
 | Raw undo/redo | local raw undo/redo updated the rich pane |
 | Revoked raw collaborator | status `No permission`; the CodeMirror pane became read-only |
 | Raw Markdown snapshot | `vault_nodes.content` and the Markdown file contained the raw edit |
-| Disconnect removes presence | caret and top avatar disappeared for the remaining user |
+| Disconnect removes presence | caret removed immediately; avatar removed after the 3 s grace period |
 | Large note (300 real blocks) | opened in ~1.5 s; edits synced |
 | Live link rewrite on rename | open editor link changed to the renamed path; snapshot kept it |
 | Live Typesense search after snapshot | unique phrase found the note |
@@ -505,9 +520,10 @@ not committed.
 
 Playwright checks covered: live typing in both directions, caret name labels,
 connected-user avatars, rich/raw switching, raw Markdown co-editing, raw remote
-carets, rich caret persistence while raw users edit, database and file
-snapshots, reload, offline-edit/reconnect merge, revoke, provider cleanup,
-service restart and token expiry.
+carets, rich caret persistence while raw users edit, new-note seeding, blur and
+idle presence, note switching, database and file snapshots, reload,
+offline-edit/reconnect merge, revoke, provider cleanup, service restart and token
+expiry.
 
 ### NAS deployment verification
 
