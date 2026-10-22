@@ -623,6 +623,116 @@ async function main() {
             fidelityRich.slice(0, 180)
         );
 
+        // A Markdown table selection must map to the same visible text in the
+        // rich editor. Table cells are separate blocks in ProseMirror, so a
+        // head on a cell boundary used to drag the name label into the next
+        // column (or to the far edge of the cell).
+        await openNote(alice.page, vaultId, notes.table);
+        await ensureRich(alice.page);
+        await openNote(bob.page, vaultId, notes.table);
+        await ensureRaw(bob.page);
+
+        const tableLine = bob.page
+            .locator('.cm-line')
+            .filter({ hasText: 'Given Definition' })
+            .first();
+        const tableLineText = await tableLine.evaluate(element => {
+            const clone = element.cloneNode(true);
+            clone
+                .querySelectorAll(
+                    '.cm-ySelectionCaret, .cm-ySelectionInfo, .cm-ySelectionCaretDot, .cm-ySelection'
+                )
+                .forEach(node => node.remove());
+
+            return clone.textContent ?? '';
+        });
+
+        async function selectRawTableRange(from, length) {
+            await bob.page.bringToFront();
+            await tableLine.click();
+            await bob.page.waitForTimeout(200);
+            await bob.page.keyboard.press('Home');
+
+            for (let index = 0; index < from; index++) {
+                await bob.page.keyboard.press('ArrowRight');
+            }
+
+            for (let index = 0; index < length; index++) {
+                await bob.page.keyboard.press('Shift+ArrowRight');
+            }
+
+            await bob.page.waitForTimeout(200);
+            await alice.page.bringToFront();
+            await alice.page.waitForTimeout(900);
+        }
+
+        async function richTableSelection() {
+            return alice.page.evaluate(() => {
+                const box = element => {
+                    const rect = element.getBoundingClientRect();
+
+                    return {
+                        x: Math.round(rect.x * 10) / 10,
+                        right: Math.round(rect.right * 10) / 10,
+                        y: Math.round(rect.y * 10) / 10,
+                    };
+                };
+
+                return {
+                    spans: [...document.querySelectorAll('.collaboration-carets__selection')].map(
+                        element => ({
+                            text: element.textContent ?? '',
+                            cell: element.closest('td, th')?.textContent ?? '',
+                            rect: box(element),
+                        })
+                    ),
+                    labels: [...document.querySelectorAll('.collaboration-carets__label')].map(
+                        element => ({
+                            text: element.textContent ?? '',
+                            cell: element.closest('td, th')?.textContent ?? '',
+                            rect: box(element),
+                        })
+                    ),
+                };
+            });
+        }
+
+        await selectRawTableRange(2, 16);
+        const singleTableState = await richTableSelection();
+        check(
+            'raw single-cell selection highlights only the selected header text',
+            singleTableState.spans.length === 1 &&
+                singleTableState.spans[0].text === 'Given Definition',
+            JSON.stringify(singleTableState.spans.map(span => span.text))
+        );
+        check(
+            'raw single-cell selection label sits at the text end in the same cell',
+            singleTableState.spans.length === 1 &&
+                singleTableState.labels.length === 1 &&
+                String(singleTableState.labels[0].cell).startsWith('Given Definition') &&
+                Math.abs(singleTableState.labels[0].rect.x - singleTableState.spans[0].rect.right) <
+                    4,
+            JSON.stringify(singleTableState)
+        );
+
+        await selectRawTableRange(0, tableLineText.length);
+        const rowTableState = await richTableSelection();
+        check(
+            'raw table-row selection highlights all three header cells',
+            rowTableState.spans.length === 3 &&
+                rowTableState.spans.map(span => span.text).join('|') ===
+                    'Given Definition|Expression|Has Type',
+            JSON.stringify(rowTableState.spans.map(span => span.text))
+        );
+        check(
+            'raw table-row selection label stays in the last selected cell',
+            rowTableState.labels.length === 1 &&
+                rowTableState.spans.length === 3 &&
+                String(rowTableState.labels[0].cell).startsWith('Has Type') &&
+                rowTableState.labels[0].rect.x >= rowTableState.spans[2].rect.right - 2,
+            JSON.stringify(rowTableState.labels)
+        );
+
         // Long note smoke test.
         await openNote(alice.page, vaultId, notes.long);
         await ensureRaw(alice.page);

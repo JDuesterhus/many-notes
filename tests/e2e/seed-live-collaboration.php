@@ -59,6 +59,13 @@ $notes['fidelity'] = app(CreateVaultNode::class)->handle($vault, [
     'content' => "# Fidelity\n\nA paragraph with **bold**, *italic* and `code`.\n\n- item one\n- item two\n\n1. ordered one\n2. ordered two\n\n- [ ] open task\n- [x] done task\n\n> A quote.\n\n```js\nconst answer = 42;\n```\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n[Example](https://example.com)\n",
 ]);
 
+$notes['table'] = app(CreateVaultNode::class)->handle($vault, [
+    'is_file' => true,
+    'name' => 'Live Table',
+    'extension' => 'md',
+    'content' => "| Given Definition | Expression | Has Type |\n| --- | --- | --- |\n| ACTION(Foo) | Foo() | FooAction |\n",
+]);
+
 $long = "# Long\n\n";
 
 for ($i = 1; $i <= 120; $i++) {

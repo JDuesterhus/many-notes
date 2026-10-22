@@ -48,6 +48,15 @@ const editorTheme = EditorView.theme({
         caretColor: 'currentColor',
         padding: '0 16px',
     },
+    '.cm-cursor, .cm-dropCursor': {
+        borderLeftColor: 'currentColor',
+    },
+    '.cm-selectionBackground, ::selection': {
+        backgroundColor: 'color-mix(in srgb, #5893e7 32%, transparent) !important',
+    },
+    '&.cm-focused .cm-selectionBackground': {
+        backgroundColor: 'color-mix(in srgb, #5893e7 38%, transparent) !important',
+    },
     '.cm-scroller': {
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
         lineHeight: '1.6',

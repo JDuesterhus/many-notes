@@ -1003,6 +1003,26 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
                 return;
             }
+
+            // Multi-cell/table-row selections contain visual spacing that is
+            // absent from the table's text nodes. Fall back to the first and
+            // last word of the selected text so the full row still becomes a
+            // selection instead of a lone caret.
+            const words = selectedText.match(/[\p{L}\p{N}_]+/gu) ?? [];
+
+            if (words.length > 1) {
+                const firstWord = words[0]!;
+                const lastWord = words[words.length - 1]!;
+                const firstIndex = projection.text.indexOf(firstWord);
+                const lastIndex =
+                    firstIndex < 0 ? -1 : projection.text.indexOf(lastWord, firstIndex);
+
+                if (firstIndex >= 0 && lastIndex >= 0) {
+                    setRawRange(sourceAt(firstIndex), sourceAt(lastIndex + lastWord.length));
+
+                    return;
+                }
+            }
         }
 
         // A collapsed caret, or a selection whose text cannot be located
@@ -1164,11 +1184,14 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
             if (selectedIndex >= 0) {
                 const start = textPositions[selectedIndex] ?? 0;
-                const endIndex = selectedIndex + selectedVisible.length;
-                const end =
-                    endIndex < textPositions.length
-                        ? (textPositions[endIndex] ?? doc.content.size)
-                        : doc.content.size;
+                // Use the last selected character plus one. The position just
+                // after a table cell's text is the cell boundary; ProseMirror
+                // resolves it to the cell edge and moves the name label there.
+                const lastCharIndex = selectedIndex + selectedVisible.length - 1;
+                const end = Math.min(
+                    (textPositions[lastCharIndex] ?? doc.content.size - 1) + 1,
+                    doc.content.size
+                );
                 const anchorPosition = absolutePositionToRelativePosition(
                     start,
                     binding.type,
@@ -1184,6 +1207,45 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
                 setAwarenessField('cursor', { anchor: anchorPosition, head: headPosition });
 
                 return;
+            }
+
+            // A multi-cell/table-row selection may not exist verbatim because
+            // cell boundaries are represented as separate blocks. Use the
+            // first and last selected word to span the same cells.
+            const words = selectedVisible.match(/[\p{L}\p{N}_]+/gu) ?? [];
+
+            if (words.length > 1) {
+                const firstWord = words[0]!;
+                const lastWord = words[words.length - 1]!;
+                const firstIndex = visibleText.indexOf(firstWord);
+                const lastIndex = firstIndex < 0 ? -1 : visibleText.indexOf(lastWord, firstIndex);
+
+                if (firstIndex >= 0 && lastIndex >= 0) {
+                    const start = textPositions[firstIndex] ?? 0;
+                    // Keep the head inside the final table cell. An endpoint
+                    // exactly on the table/cell boundary resolves back to the
+                    // row start in ProseMirror and puts the name label there.
+                    const lastCharIndex = lastIndex + lastWord.length - 1;
+                    const end = Math.min(
+                        (textPositions[lastCharIndex] ?? doc.content.size - 1) + 1,
+                        doc.content.size
+                    );
+                    const anchorPosition = absolutePositionToRelativePosition(
+                        start,
+                        binding.type,
+                        binding.mapping
+                    );
+                    const headPosition = absolutePositionToRelativePosition(
+                        end,
+                        binding.type,
+                        binding.mapping
+                    );
+
+                    rawRichCursorActive = true;
+                    setAwarenessField('cursor', { anchor: anchorPosition, head: headPosition });
+
+                    return;
+                }
             }
         }
 
