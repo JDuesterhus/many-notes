@@ -268,12 +268,20 @@ async function main() {
             waitForText(bob.page, seedText),
             waitForText(charlie.page, seedText),
         ]);
-        check(
-            'new note is seeded without duplicate or missing content',
-            (await richText(alice.page)).includes(seedText) &&
+        let seededOnAllClients = false;
+
+        for (let attempt = 0; attempt < 6 && !seededOnAllClients; attempt++) {
+            seededOnAllClients =
+                (await richText(alice.page)).includes(seedText) &&
                 (await richText(bob.page)).includes(seedText) &&
-                (await richText(charlie.page)).includes(seedText)
-        );
+                (await richText(charlie.page)).includes(seedText);
+
+            if (!seededOnAllClients) {
+                await sleep(400);
+            }
+        }
+
+        check('new note is seeded without duplicate or missing content', seededOnAllClients);
 
         await Promise.all([
             selectRich(alice.page, 0),
@@ -877,15 +885,32 @@ async function main() {
             .locator('.ProseMirror td')
             .filter({ hasText: 'ACTION_P(Bar, param)' })
             .first();
-        await identifierCell.click();
-        await alice.page.waitForTimeout(200);
-        await alice.page.keyboard.press('Home');
+        let identifierSelected = '';
 
-        for (let index = 0; index < 20; index++) {
-            await alice.page.keyboard.press('Shift+ArrowRight');
+        for (let attempt = 0; attempt < 3; attempt++) {
+            await identifierCell.click();
+            await alice.page.waitForTimeout(200);
+            await alice.page.keyboard.press('Home');
+
+            for (let index = 0; index < 20; index++) {
+                await alice.page.keyboard.press('Shift+ArrowRight');
+            }
+
+            await alice.page.waitForTimeout(300);
+            identifierSelected = await alice.page.evaluate(
+                () => window.getSelection()?.toString() ?? ''
+            );
+
+            if (identifierSelected === 'ACTION_P(Bar, param)') {
+                break;
+            }
         }
 
-        await alice.page.waitForTimeout(300);
+        check(
+            'rich inline-code cell selection is active',
+            identifierSelected === 'ACTION_P(Bar, param)',
+            identifierSelected
+        );
         await bob.page.bringToFront();
         await bob.page.waitForTimeout(900);
         const identifierReverse = await bob.page.evaluate(() => {

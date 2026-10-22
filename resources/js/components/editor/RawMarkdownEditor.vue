@@ -3,17 +3,12 @@ import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
 import { EditorState } from '@codemirror/state';
 import {
-    Decoration,
-    DecorationSet,
     drawSelection,
     dropCursor,
     EditorView,
     highlightSpecialChars,
     keymap,
-    ViewPlugin,
-    WidgetType,
 } from '@codemirror/view';
-import type { ViewUpdate } from '@codemirror/view';
 import type { Awareness } from 'y-protocols/awareness';
 import { yCollab, ySyncAnnotation, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
@@ -40,66 +35,61 @@ let view: EditorView | null = null;
 let undoManager: Y.UndoManager | null = null;
 let readyForUserInput = false;
 
-class LocalSelectionWidget extends WidgetType {
-    constructor(readonly label: string) {
-        super();
+let localLabelOverlay: HTMLDivElement | null = null;
+let localLabelChip: HTMLSpanElement | null = null;
+let localLabelFrame: number | null = null;
+
+function updateLocalLabel(view: EditorView): void {
+    if (!localLabelOverlay || !localLabelChip || !host.value) {
+        return;
     }
 
-    eq(other: LocalSelectionWidget): boolean {
-        return other.label === this.label;
+    const selection = view.state.selection.main;
+
+    if (selection.empty) {
+        localLabelOverlay.style.display = 'none';
+
+        return;
     }
 
-    toDOM(): HTMLElement {
-        const anchor = document.createElement('span');
-        anchor.className = 'local-selection-anchor';
+    const coordinates = view.coordsAtPos(selection.head);
 
-        const label = document.createElement('span');
-        label.className = 'local-selection-label';
-        label.textContent = this.label;
-        anchor.appendChild(label);
+    if (!coordinates) {
+        localLabelOverlay.style.display = 'none';
 
-        return anchor;
+        return;
     }
 
-    ignoreEvent(): boolean {
-        return true;
+    const hostRect = host.value.getBoundingClientRect();
+
+    localLabelChip.textContent = props.localUserName ? `${props.localUserName} (you)` : 'You';
+    localLabelOverlay.style.display = 'block';
+    localLabelOverlay.style.transform = `translate(${coordinates.left - hostRect.left}px, ${
+        coordinates.top - hostRect.top
+    }px)`;
+}
+
+function scheduleLocalLabel(view: EditorView): void {
+    if (localLabelFrame !== null) {
+        cancelAnimationFrame(localLabelFrame);
+    }
+
+    localLabelFrame = requestAnimationFrame(() => {
+        localLabelFrame = null;
+        updateLocalLabel(view);
+    });
+}
+
+function onLocalLabelScroll(): void {
+    if (view) {
+        scheduleLocalLabel(view);
     }
 }
 
-function localSelectionLabel(name: string) {
-    return ViewPlugin.fromClass(
-        class {
-            decorations: DecorationSet;
-
-            constructor(view: EditorView) {
-                this.decorations = this.build(view);
-            }
-
-            update(update: ViewUpdate): void {
-                if (update.selectionSet || update.docChanged || update.viewportChanged) {
-                    this.decorations = this.build(update.view);
-                }
-            }
-
-            build(view: EditorView): DecorationSet {
-                const selection = view.state.selection.main;
-
-                if (selection.empty) {
-                    return Decoration.none;
-                }
-
-                const widget = Decoration.widget({
-                    widget: new LocalSelectionWidget(name),
-                    side: 1,
-                });
-
-                return Decoration.set([widget.range(selection.head)]);
-            }
-        },
-        {
-            decorations: value => value.decorations,
-        }
-    );
+function onLocalLabelResize(): void {
+    if (view) {
+        scheduleLocalLabel(view);
+    }
 }
 
 const editorTheme = EditorView.theme({
@@ -206,6 +196,17 @@ function cursorAwareness(real: Awareness): Awareness {
 
 function destroyEditor(): void {
     readyForUserInput = false;
+
+    if (localLabelFrame !== null) {
+        cancelAnimationFrame(localLabelFrame);
+        localLabelFrame = null;
+    }
+
+    view?.scrollDOM.removeEventListener('scroll', onLocalLabelScroll);
+    window.removeEventListener('resize', onLocalLabelResize);
+    localLabelOverlay?.remove();
+    localLabelOverlay = null;
+    localLabelChip = null;
     view?.destroy();
     view = null;
     undoManager?.destroy();
@@ -229,7 +230,6 @@ function createEditor(): void {
                 highlightSpecialChars(),
                 drawSelection(),
                 dropCursor(),
-                localSelectionLabel(props.localUserName ? `${props.localUserName} (you)` : 'You'),
                 EditorView.lineWrapping,
                 markdown(),
                 keymap.of([...yUndoManagerKeymap, ...defaultKeymap, indentWithTab]),
@@ -241,6 +241,10 @@ function createEditor(): void {
                 EditorView.updateListener.of(update => {
                     if (!readyForUserInput) {
                         return;
+                    }
+
+                    if (update.selectionSet || update.docChanged || update.viewportChanged) {
+                        scheduleLocalLabel(update.view);
                     }
 
                     const remoteSync = update.transactions.some(
@@ -280,6 +284,18 @@ function createEditor(): void {
             ],
         }),
     });
+
+    localLabelOverlay = document.createElement('div');
+    localLabelOverlay.className = 'cm-local-label-overlay';
+    localLabelOverlay.style.display = 'none';
+
+    localLabelChip = document.createElement('span');
+    localLabelChip.className = 'local-selection-label';
+    localLabelOverlay.appendChild(localLabelChip);
+    host.value.appendChild(localLabelOverlay);
+
+    view.scrollDOM.addEventListener('scroll', onLocalLabelScroll, { passive: true });
+    window.addEventListener('resize', onLocalLabelResize);
 
     view.focus();
     // yCollab performs an initial document sync after mount. That is not a
@@ -334,5 +350,5 @@ defineExpose({ focusVisibleLine });
 </script>
 
 <template>
-    <div ref="host" class="h-full overflow-hidden"></div>
+    <div ref="host" class="relative h-full overflow-hidden"></div>
 </template>
