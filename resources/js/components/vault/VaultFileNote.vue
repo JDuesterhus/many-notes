@@ -13,7 +13,7 @@ import { AppPageProps } from '@/types';
 import { EditorContext } from '@/types/editor';
 import { VaultNode } from '@/types/vault';
 import { usePage } from '@inertiajs/vue3';
-import { computed, inject, onMounted, onUnmounted, ref, ShallowRef, watch } from 'vue';
+import { computed, inject, nextTick, onMounted, onUnmounted, ref, ShallowRef, watch } from 'vue';
 
 interface VaultFileNodeProps {
     node: VaultNode;
@@ -42,6 +42,7 @@ const form = useRequest<{ content: string }>({ content: props.node.content ?? ''
 
 const noteEditorRef = ref<HTMLElement | null>(null);
 const noteMarkdownRef = ref<HTMLElement | null>(null);
+const rawEditorRef = ref<{ focusVisibleLine: () => void } | null>(null);
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let isUnmounted = false;
@@ -93,6 +94,152 @@ const effectiveEditMode = computed(
 
 const showMarkdownEditor = computed(() => isEditingMarkdown.value);
 const rawAwareness = computed(() => provider.value?.awareness ?? null);
+
+function findScrollableAncestor(element: Element | null): HTMLElement | null {
+    let current = element?.parentElement ?? null;
+
+    while (current) {
+        const style = getComputedStyle(current);
+
+        if (
+            (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+            current.scrollHeight > current.clientHeight + 1
+        ) {
+            return current;
+        }
+
+        current = current.parentElement;
+    }
+
+    return null;
+}
+
+function scrollElementFor(rawMode: boolean): HTMLElement | null {
+    if (rawMode) {
+        return document.querySelector<HTMLElement>('.cm-scroller');
+    }
+
+    return findScrollableAncestor(document.querySelector('.ProseMirror'));
+}
+
+function captureScrollRatio(rawMode: boolean): number | null {
+    const scroller = scrollElementFor(rawMode);
+
+    if (!scroller) {
+        return null;
+    }
+
+    const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+
+    return maxScroll > 0 ? scroller.scrollTop / maxScroll : null;
+}
+
+async function restoreScrollRatio(rawMode: boolean, ratio: number | null): Promise<void> {
+    if (ratio === null) {
+        return;
+    }
+
+    await nextTick();
+
+    // CodeMirror creates its scroller one tick after the pane is mounted.
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+
+    const scroller = scrollElementFor(rawMode);
+
+    if (!scroller) {
+        return;
+    }
+
+    const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+
+    if (maxScroll > 0) {
+        scroller.scrollTop = ratio * maxScroll;
+    }
+}
+
+interface ScrollAnchor {
+    key: string;
+    offset: number;
+}
+
+function scrollAnchorKey(text: string): string {
+    return text
+        .replace(/^#+\s*/, '')
+        .replace(/^[-*+]\s+\[[ x]\]\s*/i, '')
+        .replace(/^[-*+]\s+/, '')
+        .replace(/^\d+\.\s+/, '')
+        .replace(/^\|/, '')
+        .replace(/\|/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 64);
+}
+
+function captureScrollAnchor(rawMode: boolean): ScrollAnchor | null {
+    const scroller = scrollElementFor(rawMode);
+
+    if (!scroller) {
+        return null;
+    }
+
+    const top = scroller.getBoundingClientRect().top;
+    const candidates = rawMode
+        ? [...scroller.querySelectorAll<HTMLElement>('.cm-line')]
+        : [...document.querySelectorAll<HTMLElement>('.ProseMirror > *')];
+
+    for (const candidate of candidates) {
+        const rect = candidate.getBoundingClientRect();
+        const key = scrollAnchorKey(candidate.textContent ?? '');
+
+        if (rect.bottom > top + 1 && key.length > 0) {
+            return { key, offset: rect.top - top };
+        }
+    }
+
+    return null;
+}
+
+async function restoreScrollAnchor(
+    rawMode: boolean,
+    anchor: ScrollAnchor | null,
+    ratio: number | null
+): Promise<void> {
+    if (anchor === null) {
+        return;
+    }
+
+    await nextTick();
+
+    const scroller = scrollElementFor(rawMode);
+
+    if (!scroller) {
+        return;
+    }
+
+    if (ratio !== null) {
+        const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+
+        if (maxScroll > 0) {
+            scroller.scrollTop = ratio * maxScroll;
+        }
+
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    }
+
+    const candidates = rawMode
+        ? [...scroller.querySelectorAll<HTMLElement>('.cm-line')]
+        : [...document.querySelectorAll<HTMLElement>('.ProseMirror > *')];
+    const target = candidates.find(candidate =>
+        scrollAnchorKey(candidate.textContent ?? '').includes(anchor.key)
+    );
+
+    if (!target) {
+        return;
+    }
+
+    const targetTop = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    scroller.scrollTop += targetTop - anchor.offset;
+}
 
 function handleLegacyRawInput(): void {
     if (!isLive.value) {
@@ -217,10 +364,16 @@ onMounted(() => {
     };
 });
 
-watch(isEditingMarkdown, markdownMode => {
+watch(isEditingMarkdown, (markdownMode, previousMode) => {
     if (!isLive.value) {
         return;
     }
+
+    // Carry the first visible block across panes so the same text stays at
+    // the same screen position. Fall back to a relative scroll ratio when the
+    // visible block cannot be identified (for example an empty editor).
+    const scrollAnchor = captureScrollAnchor(previousMode);
+    const scrollRatio = captureScrollRatio(previousMode);
 
     if (markdownMode) {
         endEditing();
@@ -229,6 +382,20 @@ watch(isEditingMarkdown, markdownMode => {
         clearRawCursor();
         noteEditingActivity();
     }
+
+    void (async () => {
+        if (scrollAnchor) {
+            await restoreScrollAnchor(markdownMode, scrollAnchor, scrollRatio);
+        } else {
+            await restoreScrollRatio(markdownMode, scrollRatio);
+        }
+
+        if (markdownMode) {
+            await nextTick();
+            await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+            rawEditorRef.value?.focusVisibleLine();
+        }
+    })();
 });
 
 onUnmounted(() => {
@@ -260,6 +427,7 @@ onUnmounted(() => {
 
         <RawMarkdownEditor
             v-if="isLive && showMarkdownEditor"
+            ref="rawEditorRef"
             :ytext="ytext"
             :awareness="rawAwareness"
             :editable="effectiveEditMode"

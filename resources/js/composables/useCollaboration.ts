@@ -1076,6 +1076,61 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             return textPositions[visibleOffset] ?? doc.content.size;
         };
 
+        const caretPositionFor = (sourceOffset: number): number => {
+            const approximate = positionFor(sourceOffset);
+            const projection = visibleMarkdownProjection(markdown);
+            const visibleOffset = visibleOffsetForMarkdownOffset(markdown, sourceOffset);
+
+            const findNearest = (needle: string, offsetAfter: boolean): number | null => {
+                if (!needle) {
+                    return null;
+                }
+
+                let found = -1;
+                let distance = Number.POSITIVE_INFINITY;
+                let from = 0;
+
+                while (from <= visibleText.length) {
+                    const index = visibleText.indexOf(needle, from);
+
+                    if (index < 0) {
+                        break;
+                    }
+
+                    const candidate = Math.abs(
+                        (textPositions[index] ?? doc.content.size) - approximate
+                    );
+
+                    if (candidate < distance) {
+                        found = index;
+                        distance = candidate;
+                    }
+
+                    from = index + 1;
+                }
+
+                if (found < 0) {
+                    return null;
+                }
+
+                const targetIndex = found + (offsetAfter ? needle.length : 0);
+
+                return targetIndex < textPositions.length
+                    ? (textPositions[targetIndex] ?? doc.content.size)
+                    : doc.content.size;
+            };
+
+            // Table pipes and block separators make long prefix matching
+            // fragile. A word token immediately before/after the caret is
+            // stable across both representations.
+            const before = projection.text.slice(0, visibleOffset);
+            const after = projection.text.slice(visibleOffset);
+            const tokenBefore = /([A-Za-z0-9_\u00C0-\uFFFF]+)$/.exec(before)?.[1] ?? '';
+            const tokenAfter = /^([A-Za-z0-9_\u00C0-\uFFFF]+)/.exec(after)?.[1] ?? '';
+
+            return findNearest(tokenBefore, true) ?? findNearest(tokenAfter, false) ?? approximate;
+        };
+
         const rawFrom = Math.min(anchor, head);
         const rawTo = Math.max(anchor, head);
         const selectedVisible = visibleMarkdownProjection(
@@ -1132,8 +1187,8 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             }
         }
 
-        const pmAnchor = approximateAnchor;
-        const pmHead = selectedVisible.length > 0 ? pmAnchor : positionFor(head);
+        const pmAnchor = caretPositionFor(anchor);
+        const pmHead = selectedVisible.length > 0 ? pmAnchor : caretPositionFor(head);
         const anchorPosition = absolutePositionToRelativePosition(
             pmAnchor,
             binding.type,

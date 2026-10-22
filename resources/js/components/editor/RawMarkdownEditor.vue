@@ -52,7 +52,7 @@ const editorTheme = EditorView.theme({
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
         lineHeight: '1.6',
         overflow: 'auto',
-        padding: '16px 0',
+        padding: '24px 0 16px',
     },
     '.cm-gutters': {
         backgroundColor: 'transparent',
@@ -223,7 +223,36 @@ watch(
     () => createEditor()
 );
 
+function focusVisibleLine(): void {
+    if (!view) {
+        return;
+    }
+
+    const scrollerRect = view.scrollDOM.getBoundingClientRect();
+    const line = [...view.contentDOM.querySelectorAll<HTMLElement>('.cm-line')].find(
+        candidate =>
+            candidate.getBoundingClientRect().bottom > scrollerRect.top + 1 &&
+            (candidate.textContent ?? '').length > 0
+    );
+
+    if (!line) {
+        return;
+    }
+
+    const lineStart = view.posAtDOM(line, 0);
+    // A selection exactly at a line boundary is not drawn by all browsers.
+    // Put the caret one character inside the first visible line.
+    const position = Math.min(view.state.doc.length, lineStart + 1);
+    view.dispatch({
+        selection: { anchor: position, head: position },
+        scrollIntoView: false,
+    });
+    view.focus();
+}
+
 onBeforeUnmount(destroyEditor);
+
+defineExpose({ focusVisibleLine });
 </script>
 
 <template>
