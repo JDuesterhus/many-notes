@@ -122,8 +122,42 @@ export async function sendSnapshot(
 }
 
 /**
- * Best-effort snapshot on visibilitychange/pagehide. sendBeacon cannot read a
- * response, so a conflict is resolved by the next regular snapshot.
+ * Best-effort snapshot on visibilitychange/pagehide. Prefer keepalive fetch so
+ * the current XSRF cookie can be sent as a header; sendBeacon cannot set
+ * headers and a stale meta token produces a 419 after a session rotation.
+ */
+export function keepaliveSnapshot(url: string, content: string, baseSeq: number): boolean {
+    const xsrf = xsrfCookie();
+
+    if (!xsrf) {
+        return beaconSnapshot(url, content, baseSeq);
+    }
+
+    try {
+        void fetch(url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            keepalive: true,
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-XSRF-TOKEN': xsrf,
+            },
+            body: new URLSearchParams({
+                content,
+                base_seq: String(baseSeq),
+            }),
+        });
+
+        return true;
+    } catch {
+        return beaconSnapshot(url, content, baseSeq);
+    }
+}
+
+/**
+ * Last-resort beacon when the XSRF cookie is unavailable. It uses the page
+ * meta token and therefore must remain a fallback only.
  */
 export function beaconSnapshot(url: string, content: string, baseSeq: number): boolean {
     if (typeof navigator.sendBeacon !== 'function') {

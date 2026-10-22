@@ -15,6 +15,7 @@ import {
     CollaborationRequestError,
     completeYjsSeed,
     fetchYjsToken,
+    keepaliveSnapshot,
     sendSnapshot,
 } from '@/services/collaborationRequest';
 import { PresenceUser, YjsTokenResponse } from '@/types/collaboration';
@@ -455,6 +456,18 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
                 lastRichMarkdown = next;
                 await setEditorContent(next);
+
+                // TipTap/Turndown may normalize constructs such as a soft
+                // line break. Use the serialization that the rich editor
+                // actually holds as the base for the next local delta; using
+                // the raw source as the base makes the first rich keystroke
+                // rewrite the whole normalized document in Y.Text.
+                const serialized = getEditorMarkdown?.();
+
+                if (serialized !== undefined) {
+                    lastRichMarkdown = serialized;
+                }
+
                 lastProjectedMarkdown = next;
             }
         } finally {
@@ -624,6 +637,16 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             lastRichMarkdown = richMarkdown;
             lastProjectedMarkdown = richMarkdown;
             replaceYText(ytext, richMarkdown, SEED_ORIGIN);
+
+            return;
+        }
+
+        // A raw edit can be committed to Y.Text while the tab is closing,
+        // before the projector has rebuilt the rich fragment. On the next
+        // open the materialized Markdown is newer than the fragment, so
+        // rebuild the rich view from it instead of showing stale content.
+        if (text.length > 0 && richMarkdown.length > 0 && text !== richMarkdown) {
+            await applyMarkdownToRich(text);
         }
     }
 
@@ -1109,7 +1132,10 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             return;
         }
 
-        if (beaconSnapshot(snapshotUrl, lastMarkdown, baseSeq)) {
+        if (
+            keepaliveSnapshot(snapshotUrl, lastMarkdown, baseSeq) ||
+            beaconSnapshot(snapshotUrl, lastMarkdown, baseSeq)
+        ) {
             lastSentMarkdown = lastMarkdown;
         }
     }

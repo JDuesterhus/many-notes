@@ -171,6 +171,31 @@ export function useEditor(options: SetupEditorOptions) {
                 attributes: {
                     class: 'h-full !max-w-none flow-root focus:outline-none prose dark:prose-invert pt-6',
                 },
+                handleKeyDown: (_view, event) => {
+                    if (!(event.ctrlKey || event.metaKey) || event.altKey) {
+                        return false;
+                    }
+
+                    const key = event.key.toLowerCase();
+
+                    if (key === 'z') {
+                        if (event.shiftKey) {
+                            editor.value?.commands.redo();
+                        } else {
+                            editor.value?.commands.undo();
+                        }
+
+                        return true;
+                    }
+
+                    if (key === 'y') {
+                        editor.value?.commands.redo();
+
+                        return true;
+                    }
+
+                    return false;
+                },
             },
             onCreate() {
                 isSyncing = false;
@@ -203,9 +228,10 @@ export function useEditor(options: SetupEditorOptions) {
             },
             onTransaction({ transaction }) {
                 const meta = transaction.getMeta(ySyncPluginKey) as
-                    { isChangeOrigin?: boolean } | undefined;
+                    { isChangeOrigin?: boolean; isUndoRedoOperation?: boolean } | undefined;
+                const localUndoRedo = meta?.isUndoRedoOperation === true;
 
-                isRemoteTransaction = meta?.isChangeOrigin === true;
+                isRemoteTransaction = meta?.isChangeOrigin === true && !localUndoRedo;
                 isRemoteStructural =
                     isRemoteTransaction && isStructuralTransaction(transaction, transaction.before);
             },
