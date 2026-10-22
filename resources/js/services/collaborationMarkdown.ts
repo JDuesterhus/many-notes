@@ -87,7 +87,7 @@ export function replaceYText(ytext: Y.Text, next: string, origin: string): boole
  * best-effort: an off-by-a-few-characters caret is still useful, while a caret
  * that disappears entirely is not.
  */
-function stripMarkdownSyntax(markdown: string): { text: string; map: number[] } {
+export function visibleMarkdownProjection(markdown: string): { text: string; map: number[] } {
     let text = '';
     const map: number[] = [];
 
@@ -124,7 +124,13 @@ function stripMarkdownSyntax(markdown: string): { text: string; map: number[] } 
             continue;
         }
 
-        if (character === '*' || character === '_' || character === '`' || character === '~') {
+        if (
+            character === '*' ||
+            character === '_' ||
+            character === '`' ||
+            character === '~' ||
+            character === '|'
+        ) {
             continue;
         }
 
@@ -154,7 +160,7 @@ function stripMarkdownSyntax(markdown: string): { text: string; map: number[] } 
 }
 
 export function visibleOffsetForMarkdownOffset(markdown: string, offset: number): number {
-    const { map } = stripMarkdownSyntax(markdown);
+    const { map } = visibleMarkdownProjection(markdown);
 
     if (map.length === 0 || offset <= 0) {
         return 0;
@@ -203,7 +209,7 @@ export function findMarkdownOffsetForVisibleText(markdown: string, visiblePrefix
         return 0;
     }
 
-    const { text, map } = stripMarkdownSyntax(markdown);
+    const { text, map } = visibleMarkdownProjection(markdown);
     const index = text.lastIndexOf(snippet);
 
     if (index >= 0) {

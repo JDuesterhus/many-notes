@@ -8,6 +8,7 @@ import {
     mapTextOffset,
     mergeMarkdown,
     replaceYText,
+    visibleMarkdownProjection,
     visibleOffsetForMarkdownOffset,
 } from './collaborationMarkdown';
 
@@ -92,6 +93,18 @@ describe('findMarkdownOffsetForVisibleText', () => {
 
     it('returns zero for an empty prefix', () => {
         expect(findMarkdownOffsetForVisibleText('# Title', '')).toBe(0);
+    });
+});
+
+describe('visibleMarkdownProjection', () => {
+    it('drops table pipes and maps back to source offsets', () => {
+        const markdown = '| A | B |\n| --- | --- |\n| cell one | cell two |';
+        const projection = visibleMarkdownProjection(markdown);
+        const index = projection.text.indexOf('cell one');
+
+        expect(projection.text).not.toContain('|');
+        expect(index).toBeGreaterThanOrEqual(0);
+        expect(markdown.slice(projection.map[index]).startsWith('cell one')).toBe(true);
     });
 });
 

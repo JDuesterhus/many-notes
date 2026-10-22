@@ -7,6 +7,7 @@ import {
     findMarkdownOffsetForVisibleText,
     hasMeaningfulFragmentContent,
     replaceYText,
+    visibleMarkdownProjection,
     visibleOffsetForMarkdownOffset,
 } from '@/services/collaborationMarkdown';
 import {
@@ -933,6 +934,16 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             return;
         }
 
+        const setRawRange = (start: number, end: number): void => {
+            const anchorPosition = Y.createRelativePositionFromTypeIndex(ytext, start, -1);
+            const headPosition = Y.createRelativePositionFromTypeIndex(ytext, end, 1);
+
+            setAwarenessField('rawCursor', {
+                anchor: anchorPosition,
+                head: headPosition,
+            });
+        };
+
         const offsetFor = (position: number): number => {
             const visible = editor?.state.doc.textBetween(0, position, '\n', '\n') ?? '';
 
@@ -942,15 +953,62 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             );
         };
 
-        const anchorOffset = offsetFor(anchor);
-        const headOffset = offsetFor(head);
-        const anchorPosition = Y.createRelativePositionFromTypeIndex(ytext, anchorOffset, -1);
-        const headPosition = Y.createRelativePositionFromTypeIndex(ytext, headOffset, 1);
+        const from = Math.min(anchor, head);
+        const to = Math.max(anchor, head);
+        const selectedText = editor.state.doc.textBetween(from, to, '\n', '\n').trim();
+        const approximateAnchor = offsetFor(anchor);
 
-        setAwarenessField('rawCursor', {
-            anchor: anchorPosition,
-            head: headPosition,
-        });
+        if (selectedText.length > 0) {
+            // Search the selected visible text directly in the Markdown's
+            // visible projection. Prefix arithmetic drifts badly in tables
+            // and lists; an exact text match gives a correct range or no
+            // range at all. For repeated text, use the occurrence closest to
+            // the caret's approximate source position.
+            const projection = visibleMarkdownProjection(markdown);
+            const sourceAt = (visibleOffset: number): number => {
+                if (visibleOffset <= 0) {
+                    return 0;
+                }
+
+                if (visibleOffset >= projection.map.length) {
+                    return markdown.length;
+                }
+
+                return projection.map[visibleOffset] ?? markdown.length;
+            };
+
+            let selectedIndex = -1;
+            let selectedDistance = Number.POSITIVE_INFINITY;
+            let searchFrom = 0;
+
+            while (searchFrom <= projection.text.length) {
+                const candidate = projection.text.indexOf(selectedText, searchFrom);
+
+                if (candidate < 0) {
+                    break;
+                }
+
+                const candidateDistance = Math.abs(sourceAt(candidate) - approximateAnchor);
+
+                if (candidateDistance < selectedDistance) {
+                    selectedIndex = candidate;
+                    selectedDistance = candidateDistance;
+                }
+
+                searchFrom = candidate + 1;
+            }
+
+            if (selectedIndex >= 0) {
+                setRawRange(sourceAt(selectedIndex), sourceAt(selectedIndex + selectedText.length));
+
+                return;
+            }
+        }
+
+        // A collapsed caret, or a selection whose text cannot be located
+        // unambiguously, is published as a caret. A wrong range is worse than
+        // no range.
+        setRawRange(approximateAnchor, approximateAnchor);
     }
 
     /**
@@ -1018,8 +1076,64 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             return textPositions[visibleOffset] ?? doc.content.size;
         };
 
-        const pmAnchor = positionFor(anchor);
-        const pmHead = positionFor(head);
+        const rawFrom = Math.min(anchor, head);
+        const rawTo = Math.max(anchor, head);
+        const selectedVisible = visibleMarkdownProjection(
+            markdown.slice(rawFrom, rawTo)
+        ).text.trim();
+        const approximateAnchor = positionFor(anchor);
+
+        if (selectedVisible.length > 0) {
+            let selectedIndex = -1;
+            let selectedDistance = Number.POSITIVE_INFINITY;
+            let searchFrom = 0;
+
+            while (searchFrom <= visibleText.length) {
+                const candidate = visibleText.indexOf(selectedVisible, searchFrom);
+
+                if (candidate < 0) {
+                    break;
+                }
+
+                const candidateDistance = Math.abs(
+                    (textPositions[candidate] ?? doc.content.size) - approximateAnchor
+                );
+
+                if (candidateDistance < selectedDistance) {
+                    selectedIndex = candidate;
+                    selectedDistance = candidateDistance;
+                }
+
+                searchFrom = candidate + 1;
+            }
+
+            if (selectedIndex >= 0) {
+                const start = textPositions[selectedIndex] ?? 0;
+                const endIndex = selectedIndex + selectedVisible.length;
+                const end =
+                    endIndex < textPositions.length
+                        ? (textPositions[endIndex] ?? doc.content.size)
+                        : doc.content.size;
+                const anchorPosition = absolutePositionToRelativePosition(
+                    start,
+                    binding.type,
+                    binding.mapping
+                );
+                const headPosition = absolutePositionToRelativePosition(
+                    end,
+                    binding.type,
+                    binding.mapping
+                );
+
+                rawRichCursorActive = true;
+                setAwarenessField('cursor', { anchor: anchorPosition, head: headPosition });
+
+                return;
+            }
+        }
+
+        const pmAnchor = approximateAnchor;
+        const pmHead = selectedVisible.length > 0 ? pmAnchor : positionFor(head);
         const anchorPosition = absolutePositionToRelativePosition(
             pmAnchor,
             binding.type,

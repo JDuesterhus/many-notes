@@ -194,7 +194,10 @@ positions too, so it survives edits on either side. A small awareness proxy
 translates CodeMirror's `cursor` field to `rawCursor`, keeping the raw and rich
 cursor fields independent. A rich editor also publishes an approximate
 `rawCursor` derived from its visible selection, so a raw collaborator sees the
-rich user's caret in the Markdown pane.
+rich user's caret in the Markdown pane. Cross-mode ranges are mapped by the
+actual selected visible text after Markdown syntax (including table pipes) is
+removed. If a range cannot be matched unambiguously, presence falls back to a
+caret instead of highlighting the wrong text.
 
 - Colors are deterministic from the user id and use a palette readable in light
   and dark themes.
