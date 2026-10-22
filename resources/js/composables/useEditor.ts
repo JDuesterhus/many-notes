@@ -69,6 +69,46 @@ function renderCollaborationCaret(user: PresenceUser): HTMLElement {
 
     caret.appendChild(label);
 
+    // A label anchored at the end of a narrow table cell can reach into the
+    // next column while still being at the correct caret. Flip it to the left
+    // of the caret and clamp it to the cell instead of letting it cover the
+    // neighbouring header. Labels that already fit are untouched.
+    requestAnimationFrame(() => {
+        if (!caret.isConnected) {
+            return;
+        }
+
+        label.style.left = '-1px';
+        label.style.right = 'auto';
+        label.style.maxWidth = '';
+        label.style.overflow = '';
+        label.style.textOverflow = '';
+
+        const cell = caret.closest('td, th');
+
+        if (!(cell instanceof HTMLElement)) {
+            return;
+        }
+
+        const cellRect = cell.getBoundingClientRect();
+        const labelRect = label.getBoundingClientRect();
+
+        if (labelRect.right <= cellRect.right - 2) {
+            return;
+        }
+
+        label.style.left = 'auto';
+        label.style.right = '-1px';
+
+        const flippedRect = label.getBoundingClientRect();
+
+        if (flippedRect.left < cellRect.left + 2) {
+            label.style.maxWidth = `${Math.max(24, Math.floor(cellRect.width - 6))}px`;
+            label.style.overflow = 'hidden';
+            label.style.textOverflow = 'ellipsis';
+        }
+    });
+
     return caret;
 }
 

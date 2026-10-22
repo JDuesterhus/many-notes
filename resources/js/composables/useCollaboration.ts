@@ -935,6 +935,17 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         }
 
         const setRawRange = (start: number, end: number): void => {
+            if (start === end) {
+                // A collapsed caret must resolve to one position. Using -1 for
+                // the anchor and +1 for the head at the same index can straddle
+                // the last character and render a one-character selection.
+                const position = Y.createRelativePositionFromTypeIndex(ytext, start, 0);
+
+                setAwarenessField('rawCursor', { anchor: position, head: position });
+
+                return;
+            }
+
             const anchorPosition = Y.createRelativePositionFromTypeIndex(ytext, start, -1);
             const headPosition = Y.createRelativePositionFromTypeIndex(ytext, end, 1);
 
@@ -944,8 +955,45 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             });
         };
 
+        const projection = visibleMarkdownProjection(markdown);
+        const projectionWords = [...projection.text.matchAll(/[\p{L}\p{N}_]+/gu)].map(match => ({
+            start: match.index ?? 0,
+            length: match[0].length,
+        }));
+
+        /**
+         * Match the rich text to the Markdown by word order. A prefix anchored
+         * with `lastIndexOf` cannot distinguish two identical tables: the
+         * first table's prefix resolves to the second table's last occurrence.
+         * Counting words before the rich position and taking the same word in
+         * the Markdown projection selects the occurrence the user is in.
+         */
         const offsetFor = (position: number): number => {
             const visible = editor?.state.doc.textBetween(0, position, '\n', '\n') ?? '';
+            const wordsBefore = (visible.match(/[\p{L}\p{N}_]+/gu) ?? []).length;
+            const endsWithWord = /[\p{L}\p{N}_]$/u.test(visible);
+
+            // A caret at the end of a typed word belongs after that word. Using
+            // the start of the next word inserts the remote caret at the front
+            // of the word and splits the visible text with its label.
+            if (endsWithWord && wordsBefore > 0) {
+                const word = projectionWords[Math.min(wordsBefore - 1, projectionWords.length - 1)];
+
+                if (word) {
+                    const lastIndex = word.start + word.length - 1;
+
+                    return Math.max(
+                        0,
+                        Math.min(markdown.length, (projection.map[lastIndex] ?? 0) + 1)
+                    );
+                }
+            }
+
+            const target = projectionWords[Math.min(wordsBefore, projectionWords.length - 1)];
+
+            if (target) {
+                return Math.max(0, Math.min(markdown.length, projection.map[target.start] ?? 0));
+            }
 
             return Math.max(
                 0,
@@ -964,10 +1012,13 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             // and lists; an exact text match gives a correct range or no
             // range at all. For repeated text, use the occurrence closest to
             // the caret's approximate source position.
-            const projection = visibleMarkdownProjection(markdown);
             const sourceAt = (visibleOffset: number): number => {
                 if (visibleOffset <= 0) {
-                    return 0;
+                    // The first visible character can be preceded by hidden
+                    // syntax, for example the `# ` of a heading at the very
+                    // start of the note. Do not include that syntax in the
+                    // raw selection.
+                    return projection.map[0] ?? 0;
                 }
 
                 if (visibleOffset >= projection.map.length) {
@@ -999,7 +1050,13 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             }
 
             if (selectedIndex >= 0) {
-                setRawRange(sourceAt(selectedIndex), sourceAt(selectedIndex + selectedText.length));
+                // End after the last selected visible character, not at the
+                // next visible character. The latter includes trailing
+                // Markdown syntax such as the closing `**` of a bold cell.
+                const lastSelectedIndex = selectedIndex + selectedText.length - 1;
+                const lastSource = projection.map[lastSelectedIndex] ?? markdown.length - 1;
+
+                setRawRange(sourceAt(selectedIndex), Math.min(lastSource + 1, markdown.length));
 
                 return;
             }
@@ -1007,27 +1064,71 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             // Multi-cell/table-row selections contain visual spacing that is
             // absent from the table's text nodes. Fall back to the first and
             // last word of the selected text so the full row still becomes a
-            // selection instead of a lone caret.
+            // selection instead of a lone caret. Pick the occurrence pair
+            // nearest to the rich selection, not the first one in the note.
             const words = selectedText.match(/[\p{L}\p{N}_]+/gu) ?? [];
 
             if (words.length > 1) {
                 const firstWord = words[0]!;
                 const lastWord = words[words.length - 1]!;
-                const firstIndex = projection.text.indexOf(firstWord);
-                const lastIndex =
-                    firstIndex < 0 ? -1 : projection.text.indexOf(lastWord, firstIndex);
+                const approximateEnd = offsetFor(Math.max(anchor, head));
+                let best: { firstIndex: number; lastIndex: number; score: number } | null = null;
+                let searchFrom = 0;
 
-                if (firstIndex >= 0 && lastIndex >= 0) {
-                    setRawRange(sourceAt(firstIndex), sourceAt(lastIndex + lastWord.length));
+                while (searchFrom <= projection.text.length) {
+                    const firstIndex = projection.text.indexOf(firstWord, searchFrom);
+
+                    if (firstIndex < 0) {
+                        break;
+                    }
+
+                    let lastSearchFrom = firstIndex;
+
+                    while (lastSearchFrom <= projection.text.length) {
+                        const lastIndex = projection.text.indexOf(lastWord, lastSearchFrom);
+
+                        if (lastIndex < 0) {
+                            break;
+                        }
+
+                        const score =
+                            Math.abs(sourceAt(firstIndex) - approximateAnchor) +
+                            Math.abs(sourceAt(lastIndex) - approximateEnd);
+
+                        if (!best || score < best.score) {
+                            best = { firstIndex, lastIndex, score };
+                        }
+
+                        lastSearchFrom = lastIndex + 1;
+                    }
+
+                    searchFrom = firstIndex + 1;
+                }
+
+                if (best) {
+                    const lastSelectedIndex = best.lastIndex + lastWord.length - 1;
+                    const lastSource = projection.map[lastSelectedIndex] ?? markdown.length - 1;
+
+                    setRawRange(
+                        sourceAt(best.firstIndex),
+                        Math.min(lastSource + 1, markdown.length)
+                    );
 
                     return;
                 }
             }
         }
 
-        // A collapsed caret, or a selection whose text cannot be located
-        // unambiguously, is published as a caret. A wrong range is worse than
-        // no range.
+        // A non-collapsed rich selection that cannot be located in the shared
+        // Markdown must not become a guessed caret on an unrelated word.
+        if (from !== to) {
+            setAwarenessField('rawCursor', null);
+
+            return;
+        }
+
+        // A collapsed caret is still useful even when it cannot be matched
+        // exactly; publish the closest source position.
         setRawRange(approximateAnchor, approximateAnchor);
     }
 
@@ -1079,6 +1180,73 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             return;
         });
 
+        const projection = visibleMarkdownProjection(markdown);
+        const wordTokens = (text: string) =>
+            [...text.matchAll(/[\p{L}\p{N}_]+/gu)].map(match => {
+                const start = match.index ?? 0;
+
+                return { start, end: start + match[0].length, text: match[0] };
+            });
+        const projectionWords = wordTokens(projection.text);
+        const richWords = wordTokens(visibleText);
+
+        const wordRangeForMarkdown = (
+            from: number,
+            to: number
+        ): { start: number; end: number } | null => {
+            const fromVisible = visibleOffsetForMarkdownOffset(markdown, from);
+            const toVisible = visibleOffsetForMarkdownOffset(markdown, to);
+            const first = projectionWords.findIndex(word => word.end > fromVisible);
+
+            if (first < 0) {
+                return null;
+            }
+
+            let last = -1;
+
+            for (let index = projectionWords.length - 1; index >= 0; index--) {
+                if ((projectionWords[index]?.start ?? 0) < toVisible) {
+                    last = index;
+                    break;
+                }
+            }
+
+            if (last < first) {
+                return null;
+            }
+
+            const firstProjection = projectionWords[first]!;
+            const lastProjection = projectionWords[last]!;
+            const firstRich = richWords[first];
+            const lastRich = richWords[last];
+
+            // Word order can diverge after an invisible construct such as a
+            // bare URL. Only accept the word-index mapping when the boundary
+            // words are actually the same in both representations.
+            if (
+                !firstRich ||
+                !lastRich ||
+                firstRich.text !== firstProjection.text ||
+                lastRich.text !== lastProjection.text
+            ) {
+                return null;
+            }
+
+            const firstOffset =
+                fromVisible <= firstProjection.start
+                    ? 0
+                    : Math.min(fromVisible - firstProjection.start, firstRich.text.length - 1);
+            const lastOffset = Math.min(
+                Math.max(toVisible - lastProjection.start, 1),
+                lastRich.text.length
+            );
+
+            return {
+                start: firstRich.start + firstOffset,
+                end: lastRich.start + lastOffset,
+            };
+        };
+
         const positionFor = (sourceOffset: number): number => {
             const visibleOffset = visibleOffsetForMarkdownOffset(markdown, sourceOffset);
 
@@ -1098,7 +1266,6 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
         const caretPositionFor = (sourceOffset: number): number => {
             const approximate = positionFor(sourceOffset);
-            const projection = visibleMarkdownProjection(markdown);
             const visibleOffset = visibleOffsetForMarkdownOffset(markdown, sourceOffset);
 
             const findNearest = (needle: string, offsetAfter: boolean): number | null => {
@@ -1158,7 +1325,50 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
         ).text.trim();
         const approximateAnchor = positionFor(anchor);
 
+        // A non-collapsed Markdown selection can consist only of syntax
+        // markers, pipes or whitespace (for example `|   ` or `**`). That
+        // selection has no visible counterpart in the rich editor. Do not
+        // move the remote caret onto the nearest word: it looks as if an
+        // unrelated word was selected. Clear the visual cursor instead.
+        if (selectedVisible.length === 0 && rawFrom !== rawTo) {
+            rawRichCursorActive = false;
+            setAwarenessField('cursor', null);
+
+            return;
+        }
+
         if (selectedVisible.length > 0) {
+            // Word order is the stable coordinate system in tables: the rich
+            // editor hides pipes, markers and cell whitespace, but keeps the
+            // same words in the same order. Mapping by word index also keeps
+            // a one-letter selection on the correct occurrence instead of
+            // choosing the nearest repeated letter in another cell.
+            const wordRange = wordRangeForMarkdown(rawFrom, rawTo);
+
+            if (wordRange) {
+                const start = textPositions[wordRange.start] ?? 0;
+                const lastCharIndex = Math.max(wordRange.start, wordRange.end - 1);
+                const end = Math.min(
+                    (textPositions[lastCharIndex] ?? doc.content.size - 1) + 1,
+                    doc.content.size
+                );
+                const anchorPosition = absolutePositionToRelativePosition(
+                    start,
+                    binding.type,
+                    binding.mapping
+                );
+                const headPosition = absolutePositionToRelativePosition(
+                    end,
+                    binding.type,
+                    binding.mapping
+                );
+
+                rawRichCursorActive = true;
+                setAwarenessField('cursor', { anchor: anchorPosition, head: headPosition });
+
+                return;
+            }
+
             let selectedIndex = -1;
             let selectedDistance = Number.POSITIVE_INFINITY;
             let searchFrom = 0;
@@ -1211,21 +1421,56 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
 
             // A multi-cell/table-row selection may not exist verbatim because
             // cell boundaries are represented as separate blocks. Use the
-            // first and last selected word to span the same cells.
+            // first and last selected word to span the same cells. The same
+            // words can occur earlier in the note, so pick the pair closest
+            // to the selected Markdown range instead of the first occurrence.
             const words = selectedVisible.match(/[\p{L}\p{N}_]+/gu) ?? [];
 
             if (words.length > 1) {
                 const firstWord = words[0]!;
                 const lastWord = words[words.length - 1]!;
-                const firstIndex = visibleText.indexOf(firstWord);
-                const lastIndex = firstIndex < 0 ? -1 : visibleText.indexOf(lastWord, firstIndex);
+                const approximateEnd = positionFor(Math.max(rawFrom, rawTo - 1));
+                let best: { firstIndex: number; lastIndex: number; score: number } | null = null;
+                let searchFrom = 0;
 
-                if (firstIndex >= 0 && lastIndex >= 0) {
-                    const start = textPositions[firstIndex] ?? 0;
+                while (searchFrom <= visibleText.length) {
+                    const firstIndex = visibleText.indexOf(firstWord, searchFrom);
+
+                    if (firstIndex < 0) {
+                        break;
+                    }
+
+                    let lastSearchFrom = firstIndex;
+
+                    while (lastSearchFrom <= visibleText.length) {
+                        const lastIndex = visibleText.indexOf(lastWord, lastSearchFrom);
+
+                        if (lastIndex < 0) {
+                            break;
+                        }
+
+                        const firstPosition = textPositions[firstIndex] ?? doc.content.size;
+                        const lastPosition = textPositions[lastIndex] ?? doc.content.size;
+                        const score =
+                            Math.abs(firstPosition - approximateAnchor) +
+                            Math.abs(lastPosition - approximateEnd);
+
+                        if (!best || score < best.score) {
+                            best = { firstIndex, lastIndex, score };
+                        }
+
+                        lastSearchFrom = lastIndex + 1;
+                    }
+
+                    searchFrom = firstIndex + 1;
+                }
+
+                if (best) {
+                    const start = textPositions[best.firstIndex] ?? 0;
                     // Keep the head inside the final table cell. An endpoint
                     // exactly on the table/cell boundary resolves back to the
                     // row start in ProseMirror and puts the name label there.
-                    const lastCharIndex = lastIndex + lastWord.length - 1;
+                    const lastCharIndex = best.lastIndex + lastWord.length - 1;
                     const end = Math.min(
                         (textPositions[lastCharIndex] ?? doc.content.size - 1) + 1,
                         doc.content.size
@@ -1247,6 +1492,17 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
                     return;
                 }
             }
+        }
+
+        // A non-collapsed selection which could not be mapped to any visible
+        // text (for example a URL, a lone formatting marker or an unusual
+        // combination of block syntax) must not fall back to a guessed caret
+        // on a nearby word. That looks like a different word was selected.
+        if (rawFrom !== rawTo) {
+            rawRichCursorActive = false;
+            setAwarenessField('cursor', null);
+
+            return;
         }
 
         const pmAnchor = caretPositionFor(anchor);

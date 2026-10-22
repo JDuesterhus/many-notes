@@ -63,7 +63,21 @@ $notes['table'] = app(CreateVaultNode::class)->handle($vault, [
     'is_file' => true,
     'name' => 'Live Table',
     'extension' => 'md',
-    'content' => "| Given Definition | Expression | Has Type |\n| --- | --- | --- |\n| ACTION(Foo) | Foo() | FooAction |\n",
+    'content' => "# Table Test\n\nGiven Definition appears in this paragraph.\n\n|   **Given Definition**   |   **Expression**   |   **Has Type**   |\n| --- | --- | --- |\n| ACTION(Foo) | Foo() | FooAction |\n",
+]);
+
+$notes['duplicates'] = app(CreateVaultNode::class)->handle($vault, [
+    'is_file' => true,
+    'name' => 'Live Duplicate Tables',
+    'extension' => 'md',
+    'content' => "# Duplicate Tables\n\n| **Given Definition** | **Expression** | **Has Type** |\n| --- | --- | --- |\n| A1 | B1 | C1 |\n\n| **Given Definition** | **Expression** | **Has Type** |\n| --- | --- | --- |\n| A2 | B2 | C2 |\n",
+]);
+
+$notes['words'] = app(CreateVaultNode::class)->handle($vault, [
+    'is_file' => true,
+    'name' => 'Live Repeated Words',
+    'extension' => 'md',
+    'content' => "| **Same** | **Same** | **Type** | **Type** |\n| --- | --- | --- | --- |\n| one | two | three | four |\n",
 ]);
 
 $long = "# Long\n\n";

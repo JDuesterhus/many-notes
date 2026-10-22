@@ -297,8 +297,11 @@
     .collaboration-carets__caret {
         border-left: 2px solid currentColor;
         border-right: 2px solid currentColor;
-        margin-left: -1px;
-        margin-right: -1px;
+        /* The caret is an inline widget. Cancel its full 4px border box so
+           adding a remote caret never changes a table cell's content width
+           and reflows the whole table. */
+        margin-left: -2px;
+        margin-right: -2px;
         pointer-events: none;
         position: relative;
         word-break: normal;

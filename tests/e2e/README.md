@@ -27,8 +27,8 @@ MANY_NOTES_DB=/path/to/database/sqlite/database.sqlite
 KEEP_LIVE_QA=1          # keep the generated vault for debugging
 ```
 
-The suite creates a unique vault and five notes (`sync`, `empty`, `fidelity`,
-`table`, `long`) through `seed-live-collaboration.php`, exercises rich/raw switching,
+The suite creates a unique vault and seven notes (`sync`, `empty`, `fidelity`,
+`table`, `duplicates`, `words`, `long`) through `seed-live-collaboration.php`, exercises rich/raw switching,
 presence, blur/idle, reload, reconnect, concurrent typing, note switching,
 empty-note persistence and long notes, then removes the vault unless
 `KEEP_LIVE_QA=1` is set.

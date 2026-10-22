@@ -118,9 +118,20 @@ async function waitForText(page, text, timeout = 8_000) {
         });
     }
 
-    await page.waitForFunction(value => (document.body.innerText ?? '').includes(value), text, {
-        timeout,
-    });
+    await page.waitForFunction(
+        value => {
+            const clone = document.body.cloneNode(true);
+            clone
+                .querySelectorAll(
+                    '.collaboration-carets__caret, .collaboration-carets__label, .cm-ySelectionCaret, .cm-ySelectionInfo, .cm-ySelectionCaretDot'
+                )
+                .forEach(node => node.remove());
+
+            return (clone.textContent ?? '').includes(value);
+        },
+        text,
+        { timeout }
+    );
 }
 
 async function toggleRaw(page) {
@@ -144,9 +155,7 @@ async function richText(page) {
     return page.locator('.ProseMirror').evaluate(element => {
         const clone = element.cloneNode(true);
         clone
-            .querySelectorAll(
-                '.collaboration-carets__caret, .collaboration-carets__label, .collaboration-carets__selection'
-            )
+            .querySelectorAll('.collaboration-carets__caret, .collaboration-carets__label')
             .forEach(node => node.remove());
 
         return (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
@@ -634,18 +643,17 @@ async function main() {
 
         const tableLine = bob.page
             .locator('.cm-line')
-            .filter({ hasText: 'Given Definition' })
+            .filter({ hasText: '**Given Definition**' })
             .first();
         const tableLineText = await tableLine.evaluate(element => {
             const clone = element.cloneNode(true);
             clone
-                .querySelectorAll(
-                    '.cm-ySelectionCaret, .cm-ySelectionInfo, .cm-ySelectionCaretDot, .cm-ySelection'
-                )
+                .querySelectorAll('.cm-ySelectionCaret, .cm-ySelectionInfo, .cm-ySelectionCaretDot')
                 .forEach(node => node.remove());
 
             return clone.textContent ?? '';
         });
+        const firstWordStart = tableLineText.indexOf('Given Definition');
 
         async function selectRawTableRange(from, length) {
             await bob.page.bringToFront();
@@ -678,11 +686,14 @@ async function main() {
                     };
                 };
 
+                const tables = [...document.querySelectorAll('.ProseMirror table')];
+
                 return {
                     spans: [...document.querySelectorAll('.collaboration-carets__selection')].map(
                         element => ({
                             text: element.textContent ?? '',
                             cell: element.closest('td, th')?.textContent ?? '',
+                            table: tables.indexOf(element.closest('table') ?? undefined),
                             rect: box(element),
                         })
                     ),
@@ -690,14 +701,20 @@ async function main() {
                         element => ({
                             text: element.textContent ?? '',
                             cell: element.closest('td, th')?.textContent ?? '',
+                            table: tables.indexOf(element.closest('table') ?? undefined),
                             rect: box(element),
                         })
+                    ),
+                    widths: [...document.querySelectorAll('.ProseMirror th')].map(
+                        element => Math.round(element.getBoundingClientRect().width * 100) / 100
                     ),
                 };
             });
         }
 
-        await selectRawTableRange(2, 16);
+        const tableWidthsBefore = (await richTableSelection()).widths;
+
+        await selectRawTableRange(firstWordStart, 16);
         const singleTableState = await richTableSelection();
         check(
             'raw single-cell selection highlights only the selected header text',
@@ -715,6 +732,24 @@ async function main() {
             JSON.stringify(singleTableState)
         );
 
+        // Selecting only the table pipe/spaces or the bold markers has no
+        // visible counterpart. It must not invent a caret on the next word.
+        await selectRawTableRange(0, 4);
+        const syntaxOnlyState = await richTableSelection();
+        check(
+            'raw syntax-only table selection publishes no word selection or label',
+            syntaxOnlyState.spans.length === 0 && syntaxOnlyState.labels.length === 0,
+            JSON.stringify(syntaxOnlyState)
+        );
+        check(
+            'table widths stay stable for a syntax-only selection',
+            syntaxOnlyState.widths.length === tableWidthsBefore.length &&
+                syntaxOnlyState.widths.every(
+                    (width, index) => Math.abs(width - tableWidthsBefore[index]) < 0.1
+                ),
+            JSON.stringify({ before: tableWidthsBefore, after: syntaxOnlyState.widths })
+        );
+
         await selectRawTableRange(0, tableLineText.length);
         const rowTableState = await richTableSelection();
         check(
@@ -725,12 +760,184 @@ async function main() {
             JSON.stringify(rowTableState.spans.map(span => span.text))
         );
         check(
+            'raw table-row selection does not select the duplicate paragraph',
+            rowTableState.spans.length === 3 &&
+                rowTableState.spans.every(span => String(span.cell).length > 0),
+            JSON.stringify(rowTableState.spans)
+        );
+        check(
             'raw table-row selection label stays in the last selected cell',
             rowTableState.labels.length === 1 &&
                 rowTableState.spans.length === 3 &&
                 String(rowTableState.labels[0].cell).startsWith('Has Type') &&
                 rowTableState.labels[0].rect.x >= rowTableState.spans[2].rect.right - 2,
             JSON.stringify(rowTableState.labels)
+        );
+        check(
+            'table widths stay stable when a remote selection is shown',
+            rowTableState.widths.length === tableWidthsBefore.length &&
+                rowTableState.widths.every(
+                    (width, index) => Math.abs(width - tableWidthsBefore[index]) < 0.1
+                ),
+            JSON.stringify({ before: tableWidthsBefore, after: rowTableState.widths })
+        );
+
+        // Rich -> raw must select the visible cell text only. The closing `**`
+        // is hidden syntax and must not be included in the raw range.
+        await ensureRich(alice.page);
+        await ensureRaw(bob.page);
+        const richFirstHeader = alice.page.locator('.ProseMirror th').first();
+        await richFirstHeader.click();
+        await alice.page.waitForTimeout(200);
+        await alice.page.keyboard.press('Home');
+        for (let index = 0; index < 16; index++) {
+            await alice.page.keyboard.press('Shift+ArrowRight');
+        }
+        await alice.page.waitForTimeout(300);
+        await bob.page.bringToFront();
+        await bob.page.waitForTimeout(900);
+        const richToRawTable = await bob.page.evaluate(() => {
+            const line = document.querySelector('.cm-ySelection')?.closest('.cm-line');
+            const clone = line?.cloneNode(true);
+            clone
+                ?.querySelectorAll(
+                    '.cm-ySelectionCaret, .cm-ySelectionInfo, .cm-ySelectionCaretDot'
+                )
+                .forEach(node => node.remove());
+
+            return {
+                text: [...document.querySelectorAll('.cm-ySelection')]
+                    .map(element => element.textContent ?? '')
+                    .join(''),
+                line: clone?.textContent ?? '',
+            };
+        });
+        check(
+            'rich bold table-cell selection maps to raw without the ** markers',
+            richToRawTable.text === 'Given Definition' &&
+                richToRawTable.line.includes('**Given Definition**'),
+            JSON.stringify(richToRawTable)
+        );
+
+        // Two identical tables must disambiguate by document position, not by
+        // the first matching text in the note.
+        await openNote(alice.page, vaultId, notes.duplicates);
+        await ensureRich(alice.page);
+        await openNote(bob.page, vaultId, notes.duplicates);
+        await ensureRaw(bob.page);
+
+        const duplicateLines = await bob.page.locator('.cm-line').allTextContents();
+        const firstDataLine = duplicateLines.findIndex(line => line.includes('| A1 |'));
+        const secondDataLine = duplicateLines.findIndex(line => line.includes('| A2 |'));
+
+        async function rawSelectionLine() {
+            return bob.page.evaluate(() => {
+                const lines = [...document.querySelectorAll('.cm-line')];
+                const selection = document.querySelector('.cm-ySelection');
+
+                return {
+                    text: [...document.querySelectorAll('.cm-ySelection')]
+                        .map(element => element.textContent ?? '')
+                        .join(''),
+                    lineIndex: selection
+                        ? lines.indexOf(selection.closest('.cm-line') ?? undefined)
+                        : -1,
+                };
+            });
+        }
+
+        await alice.page.locator('.ProseMirror th').nth(0).click();
+        await alice.page.waitForTimeout(200);
+        await alice.page.keyboard.press('Home');
+        for (let index = 0; index < 16; index++) {
+            await alice.page.keyboard.press('Shift+ArrowRight');
+        }
+        await alice.page.waitForTimeout(300);
+        await bob.page.bringToFront();
+        await bob.page.waitForTimeout(900);
+        const firstTableRaw = await rawSelectionLine();
+        check(
+            'rich selection in the first duplicate table maps to the first table',
+            firstTableRaw.text === 'Given Definition' &&
+                firstTableRaw.lineIndex === firstDataLine - 2,
+            JSON.stringify({ firstTableRaw, firstDataLine })
+        );
+
+        await alice.page.bringToFront();
+        await alice.page.locator('.ProseMirror th').nth(3).click();
+        await alice.page.waitForTimeout(200);
+        await alice.page.keyboard.press('Home');
+        for (let index = 0; index < 16; index++) {
+            await alice.page.keyboard.press('Shift+ArrowRight');
+        }
+        await alice.page.waitForTimeout(300);
+        await bob.page.bringToFront();
+        await bob.page.waitForTimeout(900);
+        const secondTableRaw = await rawSelectionLine();
+        check(
+            'rich selection in the second duplicate table maps to the second table',
+            secondTableRaw.text === 'Given Definition' &&
+                secondTableRaw.lineIndex === secondDataLine - 2,
+            JSON.stringify({ secondTableRaw, secondDataLine })
+        );
+
+        const secondHeaderLine = bob.page.locator('.cm-line').nth(secondDataLine - 2);
+        const secondHeaderLength = await secondHeaderLine.evaluate(element => {
+            const clone = element.cloneNode(true);
+            clone
+                .querySelectorAll('.cm-ySelectionCaret, .cm-ySelectionInfo, .cm-ySelectionCaretDot')
+                .forEach(node => node.remove());
+
+            return (clone.textContent ?? '').length;
+        });
+        await secondHeaderLine.click();
+        await bob.page.waitForTimeout(150);
+        await bob.page.keyboard.press('Home');
+        for (let index = 0; index < secondHeaderLength; index++) {
+            await bob.page.keyboard.press('Shift+ArrowRight');
+        }
+        await bob.page.waitForTimeout(300);
+        await alice.page.bringToFront();
+        await alice.page.waitForTimeout(900);
+        const duplicateRowState = await richTableSelection();
+        check(
+            'raw second duplicate row highlights only the second table',
+            duplicateRowState.spans.length === 3 &&
+                duplicateRowState.spans.every(span => span.table === 1),
+            JSON.stringify(duplicateRowState.spans)
+        );
+
+        // A repeated last word ("Type") must pick the occurrence nearest the
+        // selection end so the whole header row is covered.
+        await openNote(alice.page, vaultId, notes.words);
+        await ensureRich(alice.page);
+        await openNote(bob.page, vaultId, notes.words);
+        await ensureRaw(bob.page);
+        const wordsLine = bob.page.locator('.cm-line').filter({ hasText: '**Same**' }).first();
+        const wordsLineLength = await wordsLine.evaluate(element => {
+            const clone = element.cloneNode(true);
+            clone
+                .querySelectorAll('.cm-ySelectionCaret, .cm-ySelectionInfo, .cm-ySelectionCaretDot')
+                .forEach(node => node.remove());
+
+            return (clone.textContent ?? '').length;
+        });
+        await wordsLine.click();
+        await bob.page.waitForTimeout(150);
+        await bob.page.keyboard.press('Home');
+        for (let index = 0; index < wordsLineLength; index++) {
+            await bob.page.keyboard.press('Shift+ArrowRight');
+        }
+        await bob.page.waitForTimeout(300);
+        await alice.page.bringToFront();
+        await alice.page.waitForTimeout(900);
+        const repeatedWordState = await richTableSelection();
+        check(
+            'raw repeated header words highlight every cell',
+            repeatedWordState.spans.map(span => span.text).join('|') === 'Same|Same|Type|Type' &&
+                repeatedWordState.labels.length === 1 &&
+                String(repeatedWordState.labels[0].cell).startsWith('Type'),
+            JSON.stringify(repeatedWordState)
         );
 
         // Long note smoke test.
