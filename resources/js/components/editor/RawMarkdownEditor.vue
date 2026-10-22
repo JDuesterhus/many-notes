@@ -3,12 +3,17 @@ import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
 import { EditorState } from '@codemirror/state';
 import {
+    Decoration,
+    DecorationSet,
     drawSelection,
     dropCursor,
     EditorView,
     highlightSpecialChars,
     keymap,
+    ViewPlugin,
+    WidgetType,
 } from '@codemirror/view';
+import type { ViewUpdate } from '@codemirror/view';
 import type { Awareness } from 'y-protocols/awareness';
 import { yCollab, ySyncAnnotation, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
@@ -19,6 +24,7 @@ const props = defineProps<{
     awareness: Awareness | null;
     editable: boolean;
     spellcheck: boolean;
+    localUserName?: string;
 }>();
 
 const emit = defineEmits<{
@@ -33,6 +39,68 @@ const host = ref<HTMLElement | null>(null);
 let view: EditorView | null = null;
 let undoManager: Y.UndoManager | null = null;
 let readyForUserInput = false;
+
+class LocalSelectionWidget extends WidgetType {
+    constructor(readonly label: string) {
+        super();
+    }
+
+    eq(other: LocalSelectionWidget): boolean {
+        return other.label === this.label;
+    }
+
+    toDOM(): HTMLElement {
+        const anchor = document.createElement('span');
+        anchor.className = 'local-selection-anchor';
+
+        const label = document.createElement('span');
+        label.className = 'local-selection-label';
+        label.textContent = this.label;
+        anchor.appendChild(label);
+
+        return anchor;
+    }
+
+    ignoreEvent(): boolean {
+        return true;
+    }
+}
+
+function localSelectionLabel(name: string) {
+    return ViewPlugin.fromClass(
+        class {
+            decorations: DecorationSet;
+
+            constructor(view: EditorView) {
+                this.decorations = this.build(view);
+            }
+
+            update(update: ViewUpdate): void {
+                if (update.selectionSet || update.docChanged || update.viewportChanged) {
+                    this.decorations = this.build(update.view);
+                }
+            }
+
+            build(view: EditorView): DecorationSet {
+                const selection = view.state.selection.main;
+
+                if (selection.empty) {
+                    return Decoration.none;
+                }
+
+                const widget = Decoration.widget({
+                    widget: new LocalSelectionWidget(name),
+                    side: 1,
+                });
+
+                return Decoration.set([widget.range(selection.head)]);
+            }
+        },
+        {
+            decorations: value => value.decorations,
+        }
+    );
+}
 
 const editorTheme = EditorView.theme({
     '&': {
@@ -161,6 +229,7 @@ function createEditor(): void {
                 highlightSpecialChars(),
                 drawSelection(),
                 dropCursor(),
+                localSelectionLabel(props.localUserName ? `${props.localUserName} (you)` : 'You'),
                 EditorView.lineWrapping,
                 markdown(),
                 keymap.of([...yUndoManagerKeymap, ...defaultKeymap, indentWithTab]),

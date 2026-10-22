@@ -16,11 +16,13 @@ import {
 } from '@/services/tiptap/extension-vault-file-upload';
 import { turndownService } from '@/services/turndown';
 import type { EditorCollaboration, PresenceUser } from '@/types/collaboration';
-import { createDocument, Editor } from '@tiptap/core';
+import { createDocument, Editor, Extension } from '@tiptap/core';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import { Table, TableRow } from '@tiptap/extension-table';
 import TaskList from '@tiptap/extension-task-list';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import {
     absolutePositionToRelativePosition,
@@ -113,6 +115,48 @@ function renderCollaborationCaret(user: PresenceUser): HTMLElement {
     return caret;
 }
 
+/**
+ * A local-only label for the user's own selection. Remote labels show other
+ * people; without this, another user's active selection can look like the
+ * label of the local selection.
+ */
+function localSelectionLabel(user: PresenceUser) {
+    const labelText = user.name ? `${user.name} (you)` : 'You';
+
+    return Extension.create({
+        name: 'localSelectionLabel',
+
+        addProseMirrorPlugins() {
+            return [
+                new Plugin({
+                    key: new PluginKey('localSelectionLabel'),
+                    props: {
+                        decorations(state) {
+                            const { from, to, head } = state.selection;
+
+                            if (from === to) {
+                                return DecorationSet.empty;
+                            }
+
+                            const anchor = document.createElement('span');
+                            anchor.className = 'local-selection-anchor';
+
+                            const label = document.createElement('span');
+                            label.className = 'local-selection-label';
+                            label.textContent = labelText;
+                            anchor.appendChild(label);
+
+                            return DecorationSet.create(state.doc, [
+                                Decoration.widget(head, anchor, { side: 1 }),
+                            ]);
+                        },
+                    },
+                }),
+            ];
+        },
+    });
+}
+
 export function useEditor(options: SetupEditorOptions) {
     const editor = shallowRef<Editor | null>(null);
     const collaboration = options.collaboration ?? null;
@@ -203,6 +247,7 @@ export function useEditor(options: SetupEditorOptions) {
                                   'data-user': user.name,
                               }),
                           }),
+                          localSelectionLabel(collaboration.user),
                       ]
                     : []),
             ],

@@ -645,10 +645,12 @@ async function main() {
         await openNote(bob.page, vaultId, notes.table);
         await ensureRaw(bob.page);
 
-        const tableLine = bob.page
+        const tableLineIndex = await bob.page
             .locator('.cm-line')
-            .filter({ hasText: '**Given Definition**' })
-            .first();
+            .evaluateAll(lines =>
+                lines.findIndex(line => (line.textContent ?? '').includes('**Given Definition**'))
+            );
+        const tableLine = bob.page.locator('.cm-line').nth(tableLineIndex);
         const tableLineText = await tableLine.evaluate(element => {
             const clone = element.cloneNode(true);
             clone
@@ -767,6 +769,13 @@ async function main() {
                 Math.abs(singleTableState.labels[0].rect.x - singleTableState.spans[0].rect.right) <
                     4,
             JSON.stringify(singleTableState)
+        );
+
+        const rawLocalLabel = await bob.page.locator('.local-selection-label').allTextContents();
+        check(
+            'raw selection shows a local you label',
+            rawLocalLabel.some(text => text.includes('Live User B')),
+            JSON.stringify(rawLocalLabel)
         );
 
         // Selecting only the table pipe/spaces or the bold markers has no
@@ -1011,6 +1020,27 @@ async function main() {
             richHeaderSelection
         );
 
+        const richLocalLabel = await alice.page.locator('.local-selection-label').allTextContents();
+        check(
+            'rich selection shows a local you label',
+            richLocalLabel.some(text => text.includes('Live User A')),
+            JSON.stringify(richLocalLabel)
+        );
+
+        const widthsWithLocalLabel = await alice.page.evaluate(() =>
+            [...document.querySelectorAll('.ProseMirror th')].map(
+                element => Math.round(element.getBoundingClientRect().width * 100) / 100
+            )
+        );
+        check(
+            'local selection label does not change table widths',
+            widthsWithLocalLabel.length === tableWidthsBefore.length &&
+                widthsWithLocalLabel.every(
+                    (width, index) => Math.abs(width - tableWidthsBefore[index]) < 0.1
+                ),
+            JSON.stringify({ before: tableWidthsBefore, after: widthsWithLocalLabel })
+        );
+
         await bob.page.bringToFront();
         await bob.page.waitForTimeout(900);
         const richToRawTable = await bob.page.evaluate(() => {
@@ -1142,7 +1172,12 @@ async function main() {
         await ensureRich(alice.page);
         await openNote(bob.page, vaultId, notes.words);
         await ensureRaw(bob.page);
-        const wordsLine = bob.page.locator('.cm-line').filter({ hasText: '**Same**' }).first();
+        const wordsLineIndex = await bob.page
+            .locator('.cm-line')
+            .evaluateAll(lines =>
+                lines.findIndex(line => (line.textContent ?? '').includes('**Same**'))
+            );
+        const wordsLine = bob.page.locator('.cm-line').nth(wordsLineIndex);
         await wordsLine.click();
         await bob.page.waitForTimeout(150);
         await bob.page.keyboard.press('Home');

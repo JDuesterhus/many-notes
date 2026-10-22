@@ -86,6 +86,7 @@ const {
     updateSnapshotSeq,
     ytext,
     provider,
+    localUser,
 } = collaboration;
 
 const effectiveEditMode = computed(
@@ -432,6 +433,7 @@ onUnmounted(() => {
             :awareness="rawAwareness"
             :editable="effectiveEditMode"
             :spellcheck="isSpellcheckEnabled"
+            :local-user-name="localUser.name"
             @focus="handleRawFocus"
             @blur="handleRawBlur"
             @activity="noteEditingActivity"

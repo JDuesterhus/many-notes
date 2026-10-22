@@ -329,6 +329,35 @@
         -webkit-box-decoration-break: clone;
     }
 
+    /* A local selection label makes the user's own selection distinguishable
+       from another person's active selection. The anchor is zero-width so it
+       never changes table columns or line layout. */
+    .local-selection-anchor {
+        display: inline-block;
+        height: 1em;
+        pointer-events: none;
+        position: relative;
+        vertical-align: baseline;
+        width: 0;
+    }
+
+    .local-selection-label {
+        background-color: #2563eb;
+        border-radius: 3px 3px 3px 0;
+        color: #fff;
+        font-size: 11px;
+        font-style: normal;
+        font-weight: 600;
+        left: 0;
+        line-height: normal;
+        padding: 0.1rem 0.3rem;
+        position: absolute;
+        top: -1.5em;
+        user-select: none;
+        white-space: nowrap;
+        z-index: 7;
+    }
+
     /* An idle remote caret has no selected text. Its name chip would otherwise
        look like the label of the local selection, especially when two users
        sit in different table cells. Only label actual remote selections; the
