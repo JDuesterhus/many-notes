@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\AppVersionController;
 use App\Http\Controllers\Auth\ForgotPasswordController;
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\OAuthController;
@@ -34,6 +35,10 @@ use App\Http\Middleware\EnsureEmailIsConfigured;
 use App\Http\Middleware\EnsureRegistrationIsEnabled;
 use App\Http\Middleware\EnsureUserIsAdmin;
 use Illuminate\Support\Facades\Route;
+
+Route::get('app-version', AppVersionController::class)
+    ->middleware('throttle:120,1')
+    ->name('app.version');
 
 Route::middleware('auth')->group(function (): void {
     Route::get('', [DashboardController::class, 'index'])->name('dashboard.index');

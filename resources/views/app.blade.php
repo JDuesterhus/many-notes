@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    <meta name="app-build" content="{{ \App\Support\BuildManifest::id() }}">
     <meta name="apple-mobile-web-app-title" content="Many Notes">
     <link rel="icon" type="image/png" href="/assets/icon-32x32.png" sizes="32x32">
     <link rel="icon" type="image/png" href="/assets/icon-16x16.png" sizes="16x16">

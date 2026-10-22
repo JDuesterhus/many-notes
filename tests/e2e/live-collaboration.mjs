@@ -72,7 +72,11 @@ async function login(browser, email) {
         if (
             text.includes('/ws/app/') ||
             text.includes('409 (Conflict)') ||
-            message.location().url.includes('favicon')
+            message.location().url.includes('favicon') ||
+            (message.location().url.includes('/app-version') &&
+                text.includes('ERR_INTERNET_DISCONNECTED')) ||
+            (message.location().url.includes('/_debugbar/') &&
+                text.includes('ERR_INTERNET_DISCONNECTED'))
         ) {
             return;
         }
@@ -976,13 +980,37 @@ async function main() {
             });
         }
 
-        await alice.page.locator('.ProseMirror th').nth(0).click();
-        await alice.page.waitForTimeout(200);
-        await alice.page.keyboard.press('Home');
-        for (let index = 0; index < 16; index++) {
-            await alice.page.keyboard.press('Shift+ArrowRight');
-        }
-        await alice.page.waitForTimeout(300);
+        const selectDuplicateHeader = async index => {
+            for (let attempt = 0; attempt < 3; attempt++) {
+                await alice.page.bringToFront();
+                await alice.page.locator('.ProseMirror th').nth(index).click();
+                await alice.page.waitForTimeout(250);
+                await alice.page.keyboard.press('Home');
+
+                for (let offset = 0; offset < 16; offset++) {
+                    await alice.page.keyboard.press('Shift+ArrowRight');
+                }
+
+                await alice.page.waitForTimeout(300);
+
+                const selected = await alice.page.evaluate(
+                    () => window.getSelection()?.toString() ?? ''
+                );
+
+                if (selected === 'Given Definition') {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        const firstHeaderSelected = await selectDuplicateHeader(0);
+        check(
+            'rich selection in the first duplicate table is active',
+            firstHeaderSelected,
+            String(firstHeaderSelected)
+        );
         await bob.page.bringToFront();
         await bob.page.waitForTimeout(900);
         const firstTableRaw = await rawSelectionLine();
@@ -993,14 +1021,12 @@ async function main() {
             JSON.stringify({ firstTableRaw, firstDataLine })
         );
 
-        await alice.page.bringToFront();
-        await alice.page.locator('.ProseMirror th').nth(3).click();
-        await alice.page.waitForTimeout(200);
-        await alice.page.keyboard.press('Home');
-        for (let index = 0; index < 16; index++) {
-            await alice.page.keyboard.press('Shift+ArrowRight');
-        }
-        await alice.page.waitForTimeout(300);
+        const secondHeaderSelected = await selectDuplicateHeader(3);
+        check(
+            'rich selection in the second duplicate table is active',
+            secondHeaderSelected,
+            String(secondHeaderSelected)
+        );
         await bob.page.bringToFront();
         await bob.page.waitForTimeout(900);
         const secondTableRaw = await rawSelectionLine();
@@ -1012,20 +1038,10 @@ async function main() {
         );
 
         const secondHeaderLine = bob.page.locator('.cm-line').nth(secondDataLine - 2);
-        const secondHeaderLength = await secondHeaderLine.evaluate(element => {
-            const clone = element.cloneNode(true);
-            clone
-                .querySelectorAll('.cm-ySelectionCaret, .cm-ySelectionInfo, .cm-ySelectionCaretDot')
-                .forEach(node => node.remove());
-
-            return (clone.textContent ?? '').length;
-        });
         await secondHeaderLine.click();
         await bob.page.waitForTimeout(150);
         await bob.page.keyboard.press('Home');
-        for (let index = 0; index < secondHeaderLength; index++) {
-            await bob.page.keyboard.press('Shift+ArrowRight');
-        }
+        await bob.page.keyboard.press('Shift+End');
         await bob.page.waitForTimeout(300);
         await alice.page.bringToFront();
         await alice.page.waitForTimeout(900);
@@ -1044,21 +1060,18 @@ async function main() {
         await openNote(bob.page, vaultId, notes.words);
         await ensureRaw(bob.page);
         const wordsLine = bob.page.locator('.cm-line').filter({ hasText: '**Same**' }).first();
-        const wordsLineLength = await wordsLine.evaluate(element => {
-            const clone = element.cloneNode(true);
-            clone
-                .querySelectorAll('.cm-ySelectionCaret, .cm-ySelectionInfo, .cm-ySelectionCaretDot')
-                .forEach(node => node.remove());
-
-            return (clone.textContent ?? '').length;
-        });
         await wordsLine.click();
         await bob.page.waitForTimeout(150);
         await bob.page.keyboard.press('Home');
-        for (let index = 0; index < wordsLineLength; index++) {
-            await bob.page.keyboard.press('Shift+ArrowRight');
-        }
+        await bob.page.keyboard.press('Shift+End');
         await bob.page.waitForTimeout(300);
+        const wordsNative = await bob.page.evaluate(() => window.getSelection()?.toString() ?? '');
+        check(
+            'raw repeated header selection covers the full row',
+            (wordsNative.match(/\*\*Type\*\*/g) ?? []).length === 2 &&
+                wordsNative.trim().endsWith('|'),
+            wordsNative
+        );
         await alice.page.bringToFront();
         await alice.page.waitForTimeout(900);
         const repeatedWordState = await richTableSelection();
