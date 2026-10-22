@@ -243,7 +243,7 @@ export function useEditor(options: SetupEditorOptions) {
                               selectionRender: (user: PresenceUser) => ({
                                   nodeName: 'span',
                                   class: 'collaboration-carets__selection',
-                                  style: `background-color: ${user.color}33`,
+                                  style: `background-color: ${user.color}59; box-shadow: inset 0 -2px 0 ${user.color}`,
                                   'data-user': user.name,
                               }),
                           }),

@@ -374,6 +374,15 @@
         display: none;
     }
 
+    /* A remote Markdown selection needs a visible range even when the user's
+       color is subtle on the current theme. Underline follows the text color
+       and does not affect layout. */
+    .cm-ySelection {
+        text-decoration: underline;
+        text-decoration-thickness: 2px;
+        text-underline-offset: 2px;
+    }
+
     @media (max-width: 640px) {
         .collaboration-carets__label {
             font-size: 10px;
