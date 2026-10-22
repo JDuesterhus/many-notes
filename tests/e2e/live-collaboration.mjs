@@ -819,6 +819,89 @@ async function main() {
             JSON.stringify({ before: tableWidthsBefore, after: rowTableState.widths })
         );
 
+        // Inline code inside table cells keeps underscores and punctuation.
+        // ACTION_P / int_value / BarActionP<int> must highlight exactly, not
+        // stop at the last word or lose identifiers.
+        const identifierLine = bob.page
+            .locator('.cm-line')
+            .filter({ hasText: 'ACTION_P(Bar, param)' })
+            .first();
+        const identifierLineLength = await identifierLine.evaluate(element => {
+            const clone = element.cloneNode(true);
+            clone
+                .querySelectorAll('.cm-ySelectionCaret, .cm-ySelectionInfo, .cm-ySelectionCaretDot')
+                .forEach(node => node.remove());
+
+            return (clone.textContent ?? '').length;
+        });
+        await bob.page.bringToFront();
+        await identifierLine.click();
+        await bob.page.waitForTimeout(150);
+        await bob.page.keyboard.press('Home');
+
+        for (let index = 0; index < identifierLineLength; index++) {
+            await bob.page.keyboard.press('Shift+ArrowRight');
+        }
+
+        await bob.page.waitForTimeout(300);
+        await alice.page.bringToFront();
+        await alice.page.waitForTimeout(900);
+        const identifierRowState = await richTableSelection();
+        check(
+            'raw inline-code row preserves underscores and trailing punctuation',
+            identifierRowState.spans.map(span => span.text).join('|') ===
+                'ACTION_P(Bar, param)|Bar(int_value)|BarActionP<int>' &&
+                identifierRowState.labels.length === 1 &&
+                String(identifierRowState.labels[0].cell).startsWith('BarActionP'),
+            JSON.stringify(identifierRowState)
+        );
+        check(
+            'inline-code row keeps table widths stable',
+            identifierRowState.widths.every(
+                (width, index) => Math.abs(width - tableWidthsBefore[index]) < 0.1
+            ),
+            JSON.stringify(identifierRowState.widths)
+        );
+
+        await alice.page.bringToFront();
+        const identifierCell = alice.page
+            .locator('.ProseMirror td')
+            .filter({ hasText: 'ACTION_P(Bar, param)' })
+            .first();
+        await identifierCell.click();
+        await alice.page.waitForTimeout(200);
+        await alice.page.keyboard.press('Home');
+
+        for (let index = 0; index < 20; index++) {
+            await alice.page.keyboard.press('Shift+ArrowRight');
+        }
+
+        await alice.page.waitForTimeout(300);
+        await bob.page.bringToFront();
+        await bob.page.waitForTimeout(900);
+        const identifierReverse = await bob.page.evaluate(() => {
+            const line = document.querySelector('.cm-ySelection')?.closest('.cm-line');
+            const clone = line?.cloneNode(true);
+            clone
+                ?.querySelectorAll(
+                    '.cm-ySelectionCaret, .cm-ySelectionInfo, .cm-ySelectionCaretDot'
+                )
+                .forEach(node => node.remove());
+
+            return {
+                text: [...document.querySelectorAll('.cm-ySelection')]
+                    .map(element => element.textContent ?? '')
+                    .join(''),
+                line: clone?.textContent ?? '',
+            };
+        });
+        check(
+            'rich inline-code cell maps back without backticks or truncation',
+            identifierReverse.text === 'ACTION_P(Bar, param)' &&
+                identifierReverse.line.includes('`ACTION_P(Bar, param)`'),
+            JSON.stringify(identifierReverse)
+        );
+
         // An idle remote caret must not display a name chip: at another cell
         // that chip looks like the label of the local selection.
         await bob.page.bringToFront();

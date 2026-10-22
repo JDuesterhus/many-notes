@@ -93,11 +93,107 @@ export function visibleMarkdownProjection(markdown: string): { text: string; map
 
     for (let index = 0; index < markdown.length; index++) {
         const character = markdown[index]!;
+        const lineStart = index === 0 || markdown[index - 1] === '\n';
 
         if (character === '\\' && index + 1 < markdown.length) {
             index++;
             text += markdown[index];
             map.push(index);
+            continue;
+        }
+
+        if (character === '`') {
+            let fenceLength = 1;
+
+            while (markdown[index + fenceLength] === '`') {
+                fenceLength++;
+            }
+
+            if (fenceLength >= 3 && lineStart) {
+                // A fenced code block: skip the language/info string and copy
+                // the body verbatim. The language label is not part of the
+                // shared document text in the rich editor.
+                let cursor = index + fenceLength;
+
+                while (cursor < markdown.length && markdown[cursor] !== '\n') {
+                    cursor++;
+                }
+
+                cursor++;
+                const contentStart = cursor;
+                let closeStart = -1;
+
+                while (cursor < markdown.length) {
+                    if (cursor === contentStart || markdown[cursor - 1] === '\n') {
+                        let closeLength = 0;
+
+                        while (markdown[cursor + closeLength] === '`') {
+                            closeLength++;
+                        }
+
+                        if (closeLength >= fenceLength) {
+                            closeStart = cursor;
+                            break;
+                        }
+                    }
+
+                    cursor++;
+                }
+
+                if (closeStart >= 0) {
+                    for (let position = contentStart; position < closeStart; position++) {
+                        text += markdown[position];
+                        map.push(position);
+                    }
+
+                    let after = closeStart + fenceLength;
+
+                    while (after < markdown.length && markdown[after] !== '\n') {
+                        after++;
+                    }
+
+                    index = after;
+                    continue;
+                }
+            }
+
+            // Inline code: its content is literal. Underscores, asterisks,
+            // pipes and links inside it must not be treated as Markdown.
+            let close = -1;
+            let cursor = index + fenceLength;
+
+            while (cursor < markdown.length) {
+                if (markdown[cursor] === '`') {
+                    let closeLength = 1;
+
+                    while (markdown[cursor + closeLength] === '`') {
+                        closeLength++;
+                    }
+
+                    if (closeLength === fenceLength) {
+                        close = cursor;
+                        break;
+                    }
+
+                    cursor += closeLength;
+                    continue;
+                }
+
+                cursor++;
+            }
+
+            if (close >= 0) {
+                for (let position = index + fenceLength; position < close; position++) {
+                    text += markdown[position];
+                    map.push(position);
+                }
+
+                index = close + fenceLength - 1;
+                continue;
+            }
+
+            // Unmatched backticks are syntax, not visible text.
+            index += fenceLength - 1;
             continue;
         }
 
@@ -124,17 +220,23 @@ export function visibleMarkdownProjection(markdown: string): { text: string; map
             continue;
         }
 
-        if (
-            character === '*' ||
-            character === '_' ||
-            character === '`' ||
-            character === '~' ||
-            character === '|'
-        ) {
+        if (character === '_') {
+            const previous = markdown[index - 1] ?? '';
+            const next = markdown[index + 1] ?? '';
+
+            // An intraword underscore is part of an identifier such as
+            // ACTION_P or int_value, not an emphasis delimiter.
+            if (/[\p{L}\p{N}]/u.test(previous) && /[\p{L}\p{N}]/u.test(next)) {
+                text += character;
+                map.push(index);
+            }
+
             continue;
         }
 
-        const lineStart = index === 0 || markdown[index - 1] === '\n';
+        if (character === '*' || character === '~' || character === '|') {
+            continue;
+        }
 
         if (lineStart && (character === '#' || character === '>')) {
             let cursor = index + 1;

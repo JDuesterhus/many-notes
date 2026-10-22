@@ -106,6 +106,39 @@ describe('visibleMarkdownProjection', () => {
         expect(index).toBeGreaterThanOrEqual(0);
         expect(markdown.slice(projection.map[index]).startsWith('cell one')).toBe(true);
     });
+
+    it('keeps identifiers and inline-code underscores', () => {
+        const markdown = '| `ACTION_P(Bar, param)` | HAS_m_TEMPLATE_PARAMS | int_value | t_m |';
+        const projection = visibleMarkdownProjection(markdown);
+
+        expect(projection.text).toContain('ACTION_P(Bar, param)');
+        expect(projection.text).toContain('HAS_m_TEMPLATE_PARAMS');
+        expect(projection.text).toContain('int_value');
+        expect(projection.text).toContain('t_m');
+
+        const index = projection.text.indexOf('ACTION_P');
+        expect(markdown.slice(projection.map[index]!).startsWith('ACTION_P')).toBe(true);
+    });
+
+    it('treats inline-code content literally', () => {
+        const projection = visibleMarkdownProjection('`a_b | c*d [e](f)`');
+
+        expect(projection.text).toBe('a_b | c*d [e](f)');
+    });
+
+    it('strips emphasis underscores but not intraword ones', () => {
+        expect(visibleMarkdownProjection('_italic_ and snake_case').text).toBe(
+            'italic and snake_case'
+        );
+    });
+
+    it('skips a fenced-code language label and keeps its body', () => {
+        const projection = visibleMarkdownProjection('```js\nconst action_p = 1;\n```');
+
+        expect(projection.text).toContain('const action_p = 1;');
+        expect(projection.text).not.toContain('js');
+        expect(projection.text).not.toContain('```');
+    });
 });
 
 describe('visibleOffsetForMarkdownOffset', () => {

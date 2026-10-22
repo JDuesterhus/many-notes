@@ -63,7 +63,7 @@ $notes['table'] = app(CreateVaultNode::class)->handle($vault, [
     'is_file' => true,
     'name' => 'Live Table',
     'extension' => 'md',
-    'content' => "# Table Test\n\nGiven Definition appears in this paragraph.\n\n|   **Given Definition**   |   **Expression**   |   **Has Type**   |\n| --- | --- | --- |\n| ACTION(Foo) | Foo() | FooAction |\n",
+    'content' => "# Table Test\n\nGiven Definition appears in this paragraph.\n\n|   **Given Definition**   |   **Expression**   |   **Has Type**   |\n| --- | --- | --- |\n| ACTION(Foo) | Foo() | FooAction |\n| `ACTION_P(Bar, param)` | `Bar(int_value)` | `BarActionP<int>` |\n",
 ]);
 
 $notes['duplicates'] = app(CreateVaultNode::class)->handle($vault, [

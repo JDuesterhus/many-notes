@@ -1240,10 +1240,33 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
                 Math.max(toVisible - lastProjection.start, 1),
                 lastRich.text.length
             );
+            let end = lastRich.start + lastOffset;
+
+            // The word index identifies the last *word*, but a table cell can
+            // end in punctuation (`Foo()`, `Bar<int>`, `ACTION(Foo)`). Carry
+            // the trailing punctuation over so the highlight does not stop one
+            // character early.
+            const selectedProjection = projection.text.slice(fromVisible, toVisible);
+            const selectedWords = [...selectedProjection.matchAll(/[\p{L}\p{N}_]+/gu)];
+            const lastSelectedWord = selectedWords.at(-1);
+
+            if (lastSelectedWord) {
+                const tail = selectedProjection.slice(
+                    (lastSelectedWord.index ?? 0) + lastSelectedWord[0].length
+                );
+
+                for (const character of tail) {
+                    if (visibleText[end] !== character) {
+                        break;
+                    }
+
+                    end++;
+                }
+            }
 
             return {
                 start: firstRich.start + firstOffset,
-                end: lastRich.start + lastOffset,
+                end,
             };
         };
 
@@ -1344,10 +1367,160 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             // a one-letter selection on the correct occurrence instead of
             // choosing the nearest repeated letter in another cell.
             const wordRange = wordRangeForMarkdown(rawFrom, rawTo);
+            const words = selectedVisible.match(/[\p{L}\p{N}_]+/gu) ?? [];
+            const tokens = selectedVisible.match(/\S+/gu) ?? [];
+            let selectedIndex = -1;
+            let selectedLength = selectedVisible.length;
 
+            // A row whose cells contain only repeated punctuation (`| ... |
+            // ... | ... |`) has no word tokens. Choose the window of the same
+            // number of occurrences that best matches the selected range,
+            // instead of collapsing onto the cell nearest the caret alone.
+            if (
+                words.length === 0 &&
+                tokens.length > 1 &&
+                tokens.every(token => token === tokens[0])
+            ) {
+                const token = tokens[0]!;
+                const occurrences: number[] = [];
+                let search = 0;
+
+                while (search <= visibleText.length) {
+                    const candidate = visibleText.indexOf(token, search);
+
+                    if (candidate < 0) {
+                        break;
+                    }
+
+                    occurrences.push(candidate);
+                    search = candidate + 1;
+                }
+
+                if (occurrences.length >= tokens.length) {
+                    const approximateEnd = positionFor(Math.max(rawFrom, rawTo - 1));
+                    let bestFirst = -1;
+                    let bestLast = -1;
+                    let bestScore = Number.POSITIVE_INFINITY;
+
+                    for (let start = 0; start + tokens.length <= occurrences.length; start++) {
+                        const first = occurrences[start]!;
+                        const last = occurrences[start + tokens.length - 1]!;
+                        const score =
+                            Math.abs(
+                                (textPositions[first] ?? doc.content.size) - approximateAnchor
+                            ) +
+                            Math.abs((textPositions[last] ?? doc.content.size) - approximateEnd);
+
+                        if (score < bestScore) {
+                            bestFirst = first;
+                            bestLast = last;
+                            bestScore = score;
+                        }
+                    }
+
+                    if (bestFirst >= 0 && bestLast > bestFirst) {
+                        const start = textPositions[bestFirst] ?? 0;
+                        const lastCharIndex = bestLast + token.length - 1;
+                        const end = Math.min(
+                            (textPositions[lastCharIndex] ?? doc.content.size - 1) + 1,
+                            doc.content.size
+                        );
+                        const anchorPosition = absolutePositionToRelativePosition(
+                            start,
+                            binding.type,
+                            binding.mapping
+                        );
+                        const headPosition = absolutePositionToRelativePosition(
+                            end,
+                            binding.type,
+                            binding.mapping
+                        );
+
+                        rawRichCursorActive = true;
+                        setAwarenessField('cursor', {
+                            anchor: anchorPosition,
+                            head: headPosition,
+                        });
+
+                        return;
+                    }
+                }
+            }
+            let selectedDistance = Number.POSITIVE_INFINITY;
+            let searchFrom = 0;
+
+            // First try the complete visible selection at the occurrence
+            // identified by word order. This keeps punctuation such as `()`
+            // and `<>` and still disambiguates repeated single letters.
             if (wordRange) {
-                const start = textPositions[wordRange.start] ?? 0;
-                const lastCharIndex = Math.max(wordRange.start, wordRange.end - 1);
+                const anchored = visibleText.indexOf(
+                    selectedVisible,
+                    Math.max(0, wordRange.start - 2)
+                );
+
+                if (anchored >= 0 && Math.abs(anchored - wordRange.start) <= 2) {
+                    selectedIndex = anchored;
+                }
+            }
+
+            if (selectedIndex < 0) {
+                while (searchFrom <= visibleText.length) {
+                    const candidate = visibleText.indexOf(selectedVisible, searchFrom);
+
+                    if (candidate < 0) {
+                        break;
+                    }
+
+                    const candidateDistance = Math.abs(
+                        (textPositions[candidate] ?? doc.content.size) - approximateAnchor
+                    );
+
+                    if (candidateDistance < selectedDistance) {
+                        selectedIndex = candidate;
+                        selectedDistance = candidateDistance;
+                    }
+
+                    searchFrom = candidate + 1;
+                }
+            }
+
+            if (selectedIndex >= 0) {
+                // A row of punctuation-only cells (`| ... | ... | ... |`) has
+                // no words to align. The raw selection tells us how many
+                // occurrences were selected; extend the rich range over the
+                // same number of occurrences.
+                if (words.length === 0 && markdown.slice(rawFrom, rawTo).includes('|')) {
+                    const rawProjection = visibleMarkdownProjection(
+                        markdown.slice(rawFrom, rawTo)
+                    ).text.trim();
+                    const targetCount = rawProjection.split(selectedVisible).length - 1;
+
+                    if (targetCount > 1) {
+                        let lastIndex = selectedIndex;
+                        let from = selectedIndex + selectedVisible.length;
+
+                        for (let found = 1; found < targetCount; found++) {
+                            const next = visibleText.indexOf(selectedVisible, from);
+
+                            if (next < 0) {
+                                break;
+                            }
+
+                            lastIndex = next;
+                            from = next + selectedVisible.length;
+                        }
+
+                        if (lastIndex > selectedIndex) {
+                            selectedLength = lastIndex - selectedIndex + selectedVisible.length;
+                        }
+                    }
+                }
+
+                const start = textPositions[selectedIndex] ?? 0;
+                // Use the last selected character plus one. The position just
+                // after a table cell's text is the cell boundary; ProseMirror
+                // resolves it to the cell edge and moves the name label there.
+                const lastCharIndex = selectedIndex + selectedLength - 1;
                 const end = Math.min(
                     (textPositions[lastCharIndex] ?? doc.content.size - 1) + 1,
                     doc.content.size
@@ -1369,35 +1542,9 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
                 return;
             }
 
-            let selectedIndex = -1;
-            let selectedDistance = Number.POSITIVE_INFINITY;
-            let searchFrom = 0;
-
-            while (searchFrom <= visibleText.length) {
-                const candidate = visibleText.indexOf(selectedVisible, searchFrom);
-
-                if (candidate < 0) {
-                    break;
-                }
-
-                const candidateDistance = Math.abs(
-                    (textPositions[candidate] ?? doc.content.size) - approximateAnchor
-                );
-
-                if (candidateDistance < selectedDistance) {
-                    selectedIndex = candidate;
-                    selectedDistance = candidateDistance;
-                }
-
-                searchFrom = candidate + 1;
-            }
-
-            if (selectedIndex >= 0) {
-                const start = textPositions[selectedIndex] ?? 0;
-                // Use the last selected character plus one. The position just
-                // after a table cell's text is the cell boundary; ProseMirror
-                // resolves it to the cell edge and moves the name label there.
-                const lastCharIndex = selectedIndex + selectedVisible.length - 1;
+            if (wordRange) {
+                const start = textPositions[wordRange.start] ?? 0;
+                const lastCharIndex = Math.max(wordRange.start, wordRange.end - 1);
                 const end = Math.min(
                     (textPositions[lastCharIndex] ?? doc.content.size - 1) + 1,
                     doc.content.size
@@ -1424,8 +1571,6 @@ export function useNoteCollaboration(options: UseNoteCollaborationOptions) {
             // first and last selected word to span the same cells. The same
             // words can occur earlier in the note, so pick the pair closest
             // to the selected Markdown range instead of the first occurrence.
-            const words = selectedVisible.match(/[\p{L}\p{N}_]+/gu) ?? [];
-
             if (words.length > 1) {
                 const firstWord = words[0]!;
                 const lastWord = words[words.length - 1]!;
