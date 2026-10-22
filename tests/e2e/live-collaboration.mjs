@@ -654,6 +654,7 @@ async function main() {
             return clone.textContent ?? '';
         });
         const firstWordStart = tableLineText.indexOf('Given Definition');
+        const expressionStart = tableLineText.indexOf('Expression');
 
         async function selectRawTableRange(from, length) {
             await bob.page.bringToFront();
@@ -672,6 +673,38 @@ async function main() {
             await bob.page.waitForTimeout(200);
             await alice.page.bringToFront();
             await alice.page.waitForTimeout(900);
+        }
+
+        async function visibleRichLabels() {
+            return alice.page.evaluate(() =>
+                [...document.querySelectorAll('.collaboration-carets__label')]
+                    .filter(element => getComputedStyle(element).display !== 'none')
+                    .map(element => ({
+                        text: element.textContent ?? '',
+                        cell: element.closest('td, th')?.textContent ?? '',
+                    }))
+            );
+        }
+
+        async function visibleRawLabels() {
+            return alice.page.evaluate(() =>
+                [...document.querySelectorAll('.cm-ySelectionInfo')]
+                    .filter(element => getComputedStyle(element).display !== 'none')
+                    .map(element => {
+                        const line = element.closest('.cm-line');
+                        const clone = line?.cloneNode(true);
+                        clone
+                            ?.querySelectorAll(
+                                '.cm-ySelectionCaret, .cm-ySelectionInfo, .cm-ySelectionCaretDot'
+                            )
+                            .forEach(node => node.remove());
+
+                        return {
+                            text: element.textContent ?? '',
+                            line: clone?.textContent ?? '',
+                        };
+                    })
+            );
         }
 
         async function richTableSelection() {
@@ -782,18 +815,115 @@ async function main() {
             JSON.stringify({ before: tableWidthsBefore, after: rowTableState.widths })
         );
 
+        // An idle remote caret must not display a name chip: at another cell
+        // that chip looks like the label of the local selection.
+        await bob.page.bringToFront();
+        await tableLine.click();
+        await bob.page.waitForTimeout(150);
+        await bob.page.keyboard.press('Home');
+
+        for (let index = 0; index < expressionStart; index++) {
+            await bob.page.keyboard.press('ArrowRight');
+        }
+
+        await bob.page.waitForTimeout(250);
+        await alice.page.bringToFront();
+        await alice.page.waitForTimeout(800);
+        const idleRichLabels = await visibleRichLabels();
+        check(
+            'idle raw caret shows no misleading rich name chip',
+            idleRichLabels.length === 0,
+            JSON.stringify(idleRichLabels)
+        );
+
+        await selectRawTableRange(firstWordStart, 16);
+        const selectedRichLabels = await visibleRichLabels();
+        check(
+            'raw selection still shows its name chip at the selected text',
+            selectedRichLabels.length === 1 &&
+                String(selectedRichLabels[0].cell).startsWith('Given Definition'),
+            JSON.stringify(selectedRichLabels)
+        );
+
+        // The same rule in the Markdown pane: an idle rich caret should not
+        // label itself; a real rich selection should.
+        await ensureRaw(alice.page);
+        await ensureRich(bob.page);
+        await sleep(900);
+        await bob.page.bringToFront();
+        await bob.page.locator('.ProseMirror th').nth(1).click();
+        await bob.page.waitForTimeout(300);
+        await alice.page.bringToFront();
+        await sleep(800);
+        const idleRawLabels = await visibleRawLabels();
+        check(
+            'idle rich caret shows no misleading Markdown name chip',
+            idleRawLabels.length === 0,
+            JSON.stringify(idleRawLabels)
+        );
+
+        await bob.page.bringToFront();
+        const bobFirstHeader = bob.page.locator('.ProseMirror th').first();
+        await bobFirstHeader.click();
+        await bob.page.waitForTimeout(200);
+        await bob.page.keyboard.press('Home');
+
+        for (let index = 0; index < 16; index++) {
+            await bob.page.keyboard.press('Shift+ArrowRight');
+        }
+
+        await bob.page.waitForTimeout(300);
+        await alice.page.bringToFront();
+        await sleep(800);
+        const selectedRawLabels = await visibleRawLabels();
+        check(
+            'rich selection still shows its name chip in the Markdown pane',
+            selectedRawLabels.length === 1 &&
+                selectedRawLabels[0].line.includes('**Given Definition**'),
+            JSON.stringify(selectedRawLabels)
+        );
+
+        await ensureRich(alice.page);
+        await ensureRaw(bob.page);
+        await sleep(700);
+
         // Rich -> raw must select the visible cell text only. The closing `**`
         // is hidden syntax and must not be included in the raw range.
         await ensureRich(alice.page);
         await ensureRaw(bob.page);
-        const richFirstHeader = alice.page.locator('.ProseMirror th').first();
-        await richFirstHeader.click();
-        await alice.page.waitForTimeout(200);
-        await alice.page.keyboard.press('Home');
-        for (let index = 0; index < 16; index++) {
-            await alice.page.keyboard.press('Shift+ArrowRight');
+        await alice.page.waitForTimeout(900);
+
+        const selectRichHeader = async () => {
+            const header = alice.page.locator('.ProseMirror th').first();
+            await header.click();
+            await alice.page.waitForTimeout(250);
+            await alice.page.keyboard.press('Home');
+
+            for (let index = 0; index < 16; index++) {
+                await alice.page.keyboard.press('Shift+ArrowRight');
+            }
+
+            await alice.page.waitForTimeout(300);
+
+            return alice.page.evaluate(() => window.getSelection()?.toString() ?? '');
+        };
+
+        let richHeaderSelection = '';
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+            richHeaderSelection = await selectRichHeader();
+
+            if (richHeaderSelection === 'Given Definition') {
+                break;
+            }
         }
-        await alice.page.waitForTimeout(300);
+
+        check(
+            'rich header selection is active before checking the raw pane',
+            richHeaderSelection === 'Given Definition',
+            richHeaderSelection
+        );
+
         await bob.page.bringToFront();
         await bob.page.waitForTimeout(900);
         const richToRawTable = await bob.page.evaluate(() => {

@@ -329,6 +329,22 @@
         -webkit-box-decoration-break: clone;
     }
 
+    /* An idle remote caret has no selected text. Its name chip would otherwise
+       look like the label of the local selection, especially when two users
+       sit in different table cells. Only label actual remote selections; the
+       colored caret remains and its title still identifies the user. */
+    .ProseMirror
+        :is(p, h1, h2, h3, h4, h5, h6, li, td, th, pre):not(:has(.collaboration-carets__selection))
+        .collaboration-carets__label {
+        display: none;
+    }
+
+    /* Same rule for the Markdown pane. CodeMirror puts remote selections in
+       .cm-ySelection and the idle/selection caret in .cm-ySelectionCaret. */
+    .cm-line:not(:has(.cm-ySelection)) .cm-ySelectionInfo {
+        display: none;
+    }
+
     @media (max-width: 640px) {
         .collaboration-carets__label {
             font-size: 10px;

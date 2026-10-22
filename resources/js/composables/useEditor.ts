@@ -59,6 +59,7 @@ function renderCollaborationCaret(user: PresenceUser): HTMLElement {
     const caret = document.createElement('span');
     caret.className = 'collaboration-carets__caret';
     caret.style.borderColor = user.color;
+    caret.title = user.name;
 
     const label = document.createElement('span');
     label.className = 'collaboration-carets__label';
